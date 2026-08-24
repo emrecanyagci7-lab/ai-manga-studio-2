@@ -4,6 +4,9 @@ import uuid
 import json
 import asyncio
 import logging
+import io
+import re
+from urllib.parse import quote as urlquote
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, List
@@ -14,6 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -26,6 +30,9 @@ from prompts import (
     SCENE_DECOMP_SYSTEM, SCENE_DECOMP_USER,
     IMAGE_PROMPT_TEMPLATE, CHARACTER_PORTRAIT_PROMPT,
 )
+
+DEFAULT_PANEL_CAP = 8
+HARD_PANEL_CAP = 30
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -77,6 +84,26 @@ class BubbleModel(BaseModel):
 
 class BubbleIn(BaseModel):
     bubbles: List[BubbleModel]
+
+
+class PanelCapIn(BaseModel):
+    max_panels_per_chapter: int = Field(ge=1, le=HARD_PANEL_CAP)
+
+
+class BatchGenerateIn(BaseModel):
+    chapter_ids: List[str] = Field(min_length=1, max_length=20)
+
+
+async def _bump_stats(manga_id: str, text_calls: int = 0, image_calls: int = 0, panels: int = 0, chapters: int = 0):
+    """Increment usage counters on the manga doc (best-effort)."""
+    inc = {}
+    if text_calls: inc["stats.text_calls"] = text_calls
+    if image_calls: inc["stats.image_calls"] = image_calls
+    if panels: inc["stats.panels_generated"] = panels
+    if chapters: inc["stats.chapters_generated"] = chapters
+    if not inc:
+        return
+    await db.mangas.update_one({"id": manga_id}, {"$inc": inc, "$set": {"updated_at": now_iso()}})
 
 
 def _sanitize_ai_error(e: Exception) -> str:
@@ -173,6 +200,7 @@ async def _run_plan_generation(job_id: str, manga_id: str, body_dict: dict):
             ),
             session_id=session,
         )
+        await _bump_stats(manga_id, text_calls=1)
         await update(70, "running")
 
         # Fill in manga details
@@ -272,6 +300,8 @@ async def create_manga(body: CreateMangaIn):
         "cover_url": None,
         "plan_status": "planning",
         "plan_job_id": job_id,
+        "max_panels_per_chapter": DEFAULT_PANEL_CAP,
+        "stats": {"text_calls": 0, "image_calls": 0, "panels_generated": 0, "chapters_generated": 0},
         "created_at": now_iso(),
         "updated_at": now_iso(),
     }
@@ -375,6 +405,7 @@ async def generate_portrait(character_id: str):
     )
     try:
         img_bytes = await generate_image(prompt, session_id=f"portrait-{character_id}")
+        await _bump_stats(char["manga_id"], image_calls=1)
     except Exception as e:
         logger.error(f"Portrait gen failed: {e}")
         raise HTTPException(503, _sanitize_ai_error(e))
@@ -443,7 +474,23 @@ async def _run_chapter_generation(job_id: str, manga_id: str, chapter_id: str):
             ),
             session_id=f"scenes-{chapter_id}",
         )
+        await _bump_stats(manga_id, text_calls=1)
         scenes = scene_data.get("scenes", [])
+        # Enforce per-manga panel cap
+        cap = int(manga.get("max_panels_per_chapter", DEFAULT_PANEL_CAP))
+        remaining = cap
+        capped_scenes = []
+        for s in scenes:
+            if remaining <= 0:
+                break
+            panels = (s.get("panels") or [])[:remaining]
+            if not panels:
+                continue
+            capped = dict(s)
+            capped["panels"] = panels
+            capped_scenes.append(capped)
+            remaining -= len(panels)
+        scenes = capped_scenes
         await update(25)
 
         # Persist scenes + panels; then generate images sequentially
@@ -515,6 +562,7 @@ async def _run_chapter_generation(job_id: str, manga_id: str, chapter_id: str):
                     background=panel["background"],
                 )
                 img_bytes = await generate_image(prompt, session_id=f"panel-{panel['id']}", reference_images=refs)
+                await _bump_stats(manga_id, image_calls=1, panels=1)
                 storage_path = await asyncio.to_thread(upload_image, img_bytes, f"panels/{manga_id}/{chapter_id}", "png")
                 url = f"/api/files/{storage_path}"
 
@@ -551,6 +599,7 @@ async def _run_chapter_generation(job_id: str, manga_id: str, chapter_id: str):
                 await db.mangas.update_one({"id": manga_id}, {"$set": {"cover_url": first_panel["image_url"]}})
 
         await db.chapters.update_one({"id": chapter_id}, {"$set": {"status": "ready", "scenes_count": len(scenes)}})
+        await _bump_stats(manga_id, chapters=1)
         await update(100, "done")
 
     except Exception as e:
@@ -583,6 +632,262 @@ async def generate_chapter(chapter_id: str):
     })
     _spawn(_run_chapter_generation(job_id, chapter["manga_id"], chapter_id))
     return {"job_id": job_id}
+
+
+# ---------------- Batch chapter generation ----------------
+async def _run_batch_chapters(batch_id: str, manga_id: str, jobs: list):
+    """Sequentially run multiple chapter generation jobs."""
+    total = len(jobs)
+    failed = 0
+    errors = []
+    for idx, item in enumerate(jobs):
+        chapter_id = item["chapter_id"]
+        job_id = item["job_id"]
+        try:
+            await _run_chapter_generation(job_id, manga_id, chapter_id)
+        except Exception as e:
+            logger.error(f"Batch item failed {chapter_id}: {e}")
+        # Inspect child job outcome
+        child = await db.generation_jobs.find_one({"id": job_id}, {"_id": 0, "status": 1, "error": 1})
+        if child and child.get("status") == "error":
+            failed += 1
+            if child.get("error"):
+                errors.append(child["error"])
+        await db.generation_jobs.update_one(
+            {"id": batch_id},
+            {"$set": {"progress": int(100 * (idx + 1) / total), "updated_at": now_iso()}},
+        )
+    final_status = "done" if failed == 0 else ("error" if failed == total else "partial")
+    await db.generation_jobs.update_one(
+        {"id": batch_id},
+        {"$set": {
+            "status": final_status,
+            "progress": 100,
+            "failed_count": failed,
+            "total_count": total,
+            "error": errors[0] if errors else None,
+            "updated_at": now_iso(),
+        }},
+    )
+
+
+@api.post("/mangas/{manga_id}/chapters/batch-generate")
+async def batch_generate(manga_id: str, body: BatchGenerateIn):
+    manga = await db.mangas.find_one({"id": manga_id}, {"_id": 0})
+    if not manga:
+        raise HTTPException(404, "Manga not found")
+
+    chapters = await db.chapters.find({"id": {"$in": body.chapter_ids}, "manga_id": manga_id}, {"_id": 0}).to_list(len(body.chapter_ids))
+    if not chapters:
+        raise HTTPException(404, "No matching chapters")
+
+    # Order by chapter number
+    chapters.sort(key=lambda c: c["number"])
+
+    jobs = []
+    for ch in chapters:
+        # Reset scenes/panels for regen
+        await db.scenes.delete_many({"chapter_id": ch["id"]})
+        await db.panels.delete_many({"chapter_id": ch["id"]})
+        job_id = new_id()
+        await db.generation_jobs.insert_one({
+            "id": job_id,
+            "type": "chapter",
+            "target_id": ch["id"],
+            "manga_id": manga_id,
+            "status": "queued",
+            "progress": 0,
+            "error": None,
+            "retry_count": 0,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        })
+        jobs.append({"chapter_id": ch["id"], "job_id": job_id, "chapter_number": ch["number"]})
+
+    batch_id = new_id()
+    await db.generation_jobs.insert_one({
+        "id": batch_id,
+        "type": "batch",
+        "target_id": manga_id,
+        "manga_id": manga_id,
+        "status": "running",
+        "progress": 0,
+        "child_jobs": [j["job_id"] for j in jobs],
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    })
+    _spawn(_run_batch_chapters(batch_id, manga_id, jobs))
+    return {"batch_id": batch_id, "jobs": jobs}
+
+
+# ---------------- Panel cap setting ----------------
+@api.patch("/mangas/{manga_id}/panel-cap")
+async def set_panel_cap(manga_id: str, body: PanelCapIn):
+    res = await db.mangas.update_one(
+        {"id": manga_id},
+        {"$set": {"max_panels_per_chapter": body.max_panels_per_chapter, "updated_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Manga not found")
+    return {"ok": True, "max_panels_per_chapter": body.max_panels_per_chapter}
+
+
+# ---------------- Usage summary ----------------
+@api.get("/usage/summary")
+async def usage_summary(client_id: str = Query(...)):
+    """Aggregate usage stats across a client's mangas."""
+    mangas = await db.mangas.find({"client_id": client_id}, {"_id": 0, "stats": 1, "id": 1, "title": 1}).to_list(500)
+    total = {"text_calls": 0, "image_calls": 0, "panels_generated": 0, "chapters_generated": 0, "mangas": len(mangas)}
+    for m in mangas:
+        s = m.get("stats") or {}
+        for k in ("text_calls", "image_calls", "panels_generated", "chapters_generated"):
+            total[k] += int(s.get(k, 0) or 0)
+    # Rough token/credit estimate: image calls dominate. ~$0.04/image, ~$0.01/text call
+    est_credits = round(total["image_calls"] * 0.04 + total["text_calls"] * 0.01, 3)
+    return {"totals": total, "estimated_credits_spent_usd": est_credits}
+
+
+# ---------------- PDF Export ----------------
+def _draw_bubble_on_image(img: Image.Image, bubble: dict):
+    """Bake a single dialogue bubble onto the PIL image."""
+    W, H = img.size
+    x = max(0, int(bubble.get("x", 0) * W))
+    y = max(0, int(bubble.get("y", 0) * H))
+    w = max(40, int(bubble.get("width", 0.3) * W))
+    h = max(30, int(bubble.get("height", 0.15) * H))
+    text = bubble.get("text", "") or ""
+    btype = bubble.get("type", "speech")
+
+    draw = ImageDraw.Draw(img, "RGBA")
+    try:
+        font_size = max(12, int(min(W, H) * 0.022))
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    if btype == "sfx":
+        # Big yellow outlined SFX text, no bubble
+        stroke = max(2, font_size // 6)
+        draw.text((x, y), text.upper(), fill=(255, 220, 0, 255), font=font, stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+        return
+
+    # Bubble background + border
+    box = (x, y, x + w, y + h)
+    if btype == "thought":
+        draw.ellipse(box, fill=(255, 255, 255, 235), outline=(20, 20, 20, 255), width=3)
+    elif btype == "shout":
+        # jagged look via double rectangle
+        draw.rectangle(box, fill=(255, 255, 255, 240), outline=(20, 20, 20, 255), width=4)
+        draw.rectangle((x + 3, y + 3, x + w - 3, y + h - 3), outline=(20, 20, 20, 255), width=1)
+    elif btype == "narration":
+        draw.rectangle(box, fill=(253, 246, 227, 240), outline=(70, 60, 30, 255), width=2)
+    elif btype == "whisper":
+        for dx in range(0, w, 8):
+            draw.line((x + dx, y, x + dx + 4, y), fill=(30, 30, 30, 255), width=2)
+            draw.line((x + dx, y + h, x + dx + 4, y + h), fill=(30, 30, 30, 255), width=2)
+        for dy in range(0, h, 8):
+            draw.line((x, y + dy, x, y + dy + 4), fill=(30, 30, 30, 255), width=2)
+            draw.line((x + w, y + dy, x + w, y + dy + 4), fill=(30, 30, 30, 255), width=2)
+        draw.rectangle((x + 2, y + 2, x + w - 2, y + h - 2), fill=(255, 255, 255, 220))
+    else:  # speech
+        draw.rounded_rectangle(box, radius=max(10, h // 4), fill=(255, 255, 255, 240), outline=(20, 20, 20, 255), width=3)
+
+    # Word-wrap text within bubble
+    pad = 8
+    max_w = w - pad * 2
+    words = text.split()
+    lines = []
+    cur = ""
+    for word in words:
+        trial = (cur + " " + word).strip()
+        bbox = draw.textbbox((0, 0), trial, font=font)
+        if bbox[2] - bbox[0] > max_w and cur:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+
+    line_h = font.getbbox("Ag")[3] + 2
+    total_h = line_h * len(lines)
+    ty = y + max(pad, (h - total_h) // 2)
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        tw = bbox[2] - bbox[0]
+        tx = x + (w - tw) // 2
+        draw.text((tx, ty), line, fill=(10, 10, 10, 255), font=font)
+        ty += line_h
+
+
+def _build_chapter_pdf_sync(panel_docs: list, images_bytes: list, chapter_title: str) -> bytes:
+    """Composite bubbles onto each panel image and export as multi-page PDF."""
+    rendered = []
+    for panel, img_data in zip(panel_docs, images_bytes):
+        img = Image.open(io.BytesIO(img_data)).convert("RGB")
+        for b in panel.get("bubbles", []) or []:
+            _draw_bubble_on_image(img, b)
+        rendered.append(img)
+
+    if not rendered:
+        # Empty placeholder
+        blank = Image.new("RGB", (800, 1000), (12, 12, 20))
+        d = ImageDraw.Draw(blank)
+        d.text((40, 40), f"No panels ready\n{chapter_title}", fill=(240, 240, 240))
+        rendered.append(blank)
+
+    buf = io.BytesIO()
+    first = rendered[0]
+    rest = rendered[1:]
+    first.save(buf, format="PDF", save_all=True, append_images=rest, resolution=150.0)
+    return buf.getvalue()
+
+
+@api.get("/chapters/{chapter_id}/export/pdf")
+async def export_chapter_pdf(chapter_id: str):
+    chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    panels = await db.panels.find(
+        {"chapter_id": chapter_id, "status": "ready", "image_url": {"$ne": None}},
+        {"_id": 0},
+    ).sort([("scene_order", 1), ("order", 1)]).to_list(500)
+
+    if not panels:
+        raise HTTPException(400, "Chapter has no ready panels to export")
+
+    async def fetch(p):
+        try:
+            path = p["image_url"].replace("/api/files/", "")
+            data, _ = await asyncio.to_thread(get_object, path)
+            return data
+        except Exception as e:
+            logger.warning(f"Skipping panel {p.get('id')} in PDF export: {e}")
+            return None
+
+    images_bytes = await asyncio.gather(*(fetch(p) for p in panels))
+    # Filter out failed panels while keeping alignment
+    valid_pairs = [(p, b) for p, b in zip(panels, images_bytes) if b]
+    if not valid_pairs:
+        raise HTTPException(502, "All panel images are unavailable")
+
+    panels_ok = [p for p, _ in valid_pairs]
+    bytes_ok = [b for _, b in valid_pairs]
+    pdf_bytes = await asyncio.to_thread(_build_chapter_pdf_sync, panels_ok, bytes_ok, chapter.get("title", "chapter"))
+
+    number = int(chapter.get("number", 0) or 0)
+    title_raw = chapter.get("title") or "chapter"
+    # ASCII-safe filename fallback + RFC 5987 encoded filename*
+    ascii_title = re.sub(r"[^A-Za-z0-9_.-]", "_", title_raw)[:40] or "chapter"
+    ascii_name = f"chapter-{number:02d}-{ascii_title}.pdf"
+    utf8_name = f"chapter-{number:02d}-{title_raw}.pdf".replace("\\", "_").replace("/", "_")
+    encoded = urlquote(utf8_name, safe="")
+    cd = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": cd},
+    )
 
 
 @api.get("/jobs/{job_id}")

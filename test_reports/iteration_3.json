@@ -1,0 +1,57 @@
+{
+  "summary": "Backend-only retest of the 3 bugs reported in iteration_2 for AI Manga Studio v2 (all fixed) plus full v2 regression. Ran /app/backend/tests/test_v2_features.py (42 tests, expanded from 38 with 4 new fix-verification tests), test_health.py and test_edge_cases.py: 61/61 passed after a test-only assertion fix. test_pipeline.py skipped as instructed (EMERGENT_LLM_KEY budget exhausted - confirmed in backend logs: 'Budget has been exceeded! Current cost: 1.88, Max budget: 1.4'). FIXED-BUG-1 VERIFIED: GET /api/chapters/{id}/export/pdf with title '\u5915\u967d\u306e\u5263 \u2014 Dusk Blade' now returns 200 application/pdf with Content-Disposition carrying both a pure-ASCII fallback (filename=\"chapter-01-______Dusk_Blade.pdf\") and an RFC 5987 variant (filename*=UTF-8''... which percent-decodes back to the original Japanese title); illegal path chars (/ : * ?) are also sanitized out of the ASCII name. FIXED-BUG-2 VERIFIED: a chapter with 4 ready panels (2 reachable images, 1 deleted storage object, 1 null image_url) exports 200 with EXACTLY 2 PDF pages (verified with pypdf) - per-panel try/except logs 'Skipping panel ... in PDF export' and does not 500; when ALL panel images are unreachable the endpoint returns 502 'All panel images are unavailable'. FIXED-BUG-3 VERIFIED: batch-generate with 2 chapters (both children fail on exhausted AI key) now ends with batch doc status='error', progress=100, failed_count=2, total_count=2, error='AI service is temporarily unavailable (usage limit reached)...' - no longer status='done'. Regression intact: usage summary zero-state + aggregation + credit math, panel-cap 1..30 validation/boundaries/404, batch structural response ordering + child/batch job docs, PDF 404/400 paths, upload validation, job stream 404. Mongo seeded directly and fully cleaned (0 leftover docs in mangas/chapters/panels/generation_jobs).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/chapters/{chapter_id}/export/pdf",
+        "issue": "The 502 'All panel images are unavailable' JSON detail never reaches the browser: the public ingress (Cloudflare) replaces any 502 response body with its own 'Bad gateway' HTML page (verified - the JSON is only visible when hitting localhost:8001 directly). The UI will therefore show a generic gateway error instead of the intended message. Consider 409/422 (or 200 with an error payload) for this application-level condition."
+      },
+      {
+        "endpoint": "POST /api/mangas/{manga_id}/chapters/batch-generate",
+        "issue": "server.py chapters.sort(key=lambda c: c['number']) still uses direct dict indexing - a chapter doc missing the 'number' field raises KeyError -> 500. Same defensive-get treatment that was applied to export_chapter_pdf should be applied here (c.get('number', 0))."
+      },
+      {
+        "endpoint": "POST /api/mangas/{manga_id}/chapters/batch-generate",
+        "issue": "Cosmetic: failed child jobs stay at progress=0 while status='error'; the batch's progress is driven to 100 regardless. Fine for the aggregate, but per-child progress bars will look stuck at 0 on failure."
+      },
+      {
+        "endpoint": "N/A (env)",
+        "issue": "EMERGENT_LLM_KEY budget still exhausted, so the batch status='partial' branch (some children succeed, some fail) could NOT be exercised end-to-end. Code review of _run_batch_chapters shows the logic is correct (failed==0 -> done, failed==total -> error, else partial), but it remains untested at runtime."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v2_features.py",
+    "/app/backend/tests/probe_pdf_mixed_pagecount.py",
+    "/app/backend/tests/probe_pdf_edge.py",
+    "/app/backend/tests/probe_batch_lifecycle.py",
+    "/app/test_reports/pytest/pytest_results_iter3.xml"
+  ],
+  "action_items": [
+    "Optional: replace the 502 for 'All panel images are unavailable' with a 4xx (or a 200 + error payload) because the ingress strips 502 bodies, so the frontend cannot surface the real reason.",
+    "Optional: use c.get('number', 0) in batch_generate's chapters.sort to avoid a KeyError 500 on chapter docs lacking 'number'.",
+    "Re-verify the batch status='partial' path once the AI key budget is restored."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/server.py is 948 lines - above the 700-line guideline. Split into routers (mangas, chapters/panels, jobs/batch, export/pdf) plus an ai_service/storage module.",
+    "export_chapter_pdf per-panel fetch() swallows every exception into a warning; consider counting skipped panels and returning them in a response header (e.g. X-Skipped-Panels) so the UI can tell the user some pages were dropped.",
+    "PDF filename ASCII fallback for a fully non-ASCII title degrades to all underscores ('chapter-01-______Dusk_Blade.pdf'); acceptable but transliteration or just 'chapter-01.pdf' would be cleaner."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v2_features.py",
+    "/app/backend/tests/probe_pdf_mixed_pagecount.py"
+  ],
+  "success_rate": {"backend": "100% (61/61 executed tests; 42/42 in test_v2_features.py)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "All seed data created directly in Mongo with a TEST_v2_<uuid> tag (mangas/chapters/panels) and real image_urls minted via POST /api/upload/character-reference. Module-scoped fixture removed everything; verified 0 leftover docs across mangas/chapters/panels/generation_jobs.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "No auth required; any client_id string works. /app/memory/test_credentials.md not needed for this app.",
+  "context_for_next_testing_agent": "All 3 iteration_2 bugs are fixed and covered by permanent tests in /app/backend/tests/test_v2_features.py: TestPdfExportEdgeCases::test_non_ascii_chapter_title (asserts both filename and filename*=UTF-8''), ::test_mixed_valid_and_broken_panel_images_exports_only_valid, ::test_all_broken_panel_images_returns_502 (must assert the body against http://localhost:8001 because the ingress rewrites 502 bodies), and TestBatchLifecycle::test_all_children_fail_batch_not_done (asserts failed_count/total_count/status). SKIP test_pipeline.py while EMERGENT_LLM_KEY budget is exhausted. pytest.ini runs -n 2 --dist loadscope; use -n 0 for serial. Untested: batch status='partial' path and any AI-dependent generation flow. Frontend was never exercised in this iteration.",
+  "rca_of_the_issue": "BUG-1 root cause was Starlette encoding response headers as latin-1; fixed by emitting an ASCII-sanitized filename plus an RFC 5987 percent-encoded filename*. BUG-2 root cause was asyncio.gather propagating a single storage HTTPError; fixed by a per-panel try/except returning None and filtering, with 502 only when every panel fails. BUG-3 root cause was _run_batch_chapters unconditionally setting status='done'; fixed by re-reading each child job's status and computing done/partial/error with failed_count/total_count/error. All three confirmed through the public ingress URL."
+}

@@ -1,0 +1,80 @@
+{
+  "summary": "Backend-only structural testing of the 3 new v2 features (usage/credit meter, panel cap, batch chapters, PDF export) plus regression on existing endpoints. NO AI generation endpoints were exercised (EMERGENT_LLM_KEY budget exhausted). 57 pytest tests run: 54 passed, 3 failed. New suite: /app/backend/tests/test_v2_features.py (35 -> 38 tests incl. 3 known-bug PDF edge cases). Existing test_health.py + test_edge_cases.py now pass 100% (validation + 404 handling fixes from this iteration confirmed). All 3 new features are structurally correct: GET /api/usage/summary aggregates stats and returns exact zero-state for a fresh client_id with correct credit math ($0.04/image + $0.01/text); PATCH panel-cap enforces 1..30 (0/-1/31/100 -> 422, missing field -> 422, unknown manga -> 404, boundaries 1 & 30 persist); POST batch-generate returns {batch_id, jobs[{chapter_id, job_id, chapter_number}]} ordered by chapter number, creates one type='chapter' job doc per chapter (each queryable via GET /api/jobs/{id}) + one type='batch' doc with a correct child_jobs array, and rejects unknown manga (404), empty list (422), >20 ids (422), unknown/foreign chapter ids (404 'No matching chapters'); GET /api/chapters/{id}/export/pdf returns a real multi-page application/pdf with attachment Content-Disposition and all 6 bubble types baked on (verified %PDF- magic, 2 pages, 241KB for an 8-panel chapter in 1.7s through the public ingress), and correctly returns 404 (no chapter) / 400 (no ready panels, or only pending panels). Mongo was seeded directly and fully cleaned up (0 leftovers).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/chapters/{chapter_id}/export/pdf",
+        "issue": "500 Internal Server Error whenever the chapter title contains non-ASCII characters (e.g. '夕陽の剣 — Dusk Blade'). Starlette encodes response headers as latin-1: 'UnicodeEncodeError: latin-1 codec can't encode characters in position 33-36' from the Content-Disposition filename. This is highly likely in production because AI-generated manga chapter titles routinely contain Japanese characters and em-dashes -> PDF export is broken for a large share of real chapters. Fix: ASCII-sanitize the filename and/or use RFC 5987 (filename=\"chapter-01.pdf\"; filename*=UTF-8''<percent-encoded>).",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "GET /api/chapters/{chapter_id}/export/pdf",
+        "issue": "500 (unhandled requests.HTTPError from storage_service.get_object) when any ready panel's image_url points to a missing/unreachable storage object. asyncio.gather has no per-panel error handling, so a single stale image kills the whole export. Fix: try/except per panel (skip it or substitute a placeholder page); return 502 with a friendly message only if every panel fails.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "POST /api/mangas/{manga_id}/chapters/batch-generate",
+        "issue": "Batch job is marked status='done', progress=100 even when EVERY child chapter job failed (verified: both children status='error' with 'AI service is temporarily unavailable...', chapters status='error', yet batch doc = done/100, error=None). The batch progress UI will report a successful batch for a completely failed run. Fix: aggregate child outcomes in _run_batch_chapters (status='error' or 'partial' + failed_count/error summary on the batch doc).",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/chapters/{chapter_id}/export/pdf",
+        "issue": "500 KeyError: 'number' if a chapter doc lacks the 'number' field (f\"chapter-{chapter['number']:02d}\") — same for a missing 'title'. Use chapter.get('number', 0) / .get('title', 'chapter')."
+      },
+      {
+        "endpoint": "GET /api/chapters/{chapter_id}/export/pdf",
+        "issue": "Filename is not sanitized for path/illegal characters — a title 'Chapter / with:bad*chars?' yields Content-Disposition filename=\"chapter-01-Chapter_/_with:bad*chars?.pdf\" (slash in the download name)."
+      },
+      {
+        "endpoint": "POST /api/mangas/{manga_id}/chapters/batch-generate",
+        "issue": "Silently drops unknown chapter_ids as long as at least one id matches (no report of skipped ids in the response), and does not de-duplicate repeated ids. Also the batch job doc omits the 'error'/'retry_count' keys that other job docs carry."
+      },
+      {
+        "endpoint": "GET /api/usage/summary",
+        "issue": "Credit estimate uses hardcoded $0.04/image and $0.01/text constants inside the handler and returns only client-wide totals (no per-manga breakdown), so the Settings meter cannot show which manga consumed the budget. Also caps at 500 mangas with no pagination. Consider a Mongo $group aggregation instead of fetching docs and summing in Python."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_v2_features.py",
+    "/app/backend/tests/probe_batch_lifecycle.py",
+    "/app/backend/tests/probe_pdf_edge.py",
+    "/app/backend/tests/probe_pdf_perf.py",
+    "/app/test_reports/pytest/v2_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: fix Content-Disposition encoding in export_chapter_pdf (non-ASCII chapter titles -> 500). Sanitize to ASCII + add RFC 5987 filename*.",
+    "HIGH: wrap per-panel image fetch in export_chapter_pdf with try/except so one missing storage object doesn't 500 the whole export.",
+    "HIGH: _run_batch_chapters must not mark the batch 'done' when children errored — set error/partial status and surface a failure count so the batch progress UI is truthful.",
+    "MINOR: use chapter.get('number')/get('title') defaults and strip path/illegal chars from the PDF filename.",
+    "MINOR: report skipped/unknown chapter_ids in the batch-generate response and de-dup ids; add error/retry_count to the batch job doc.",
+    "MINOR: move usage credit rates to config and add per-manga breakdown for the Settings credit meter."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 911 lines and mixes models, AI workers, PDF rendering and routes — split into routers/ + services/ (pdf_service.py for _draw_bubble_on_image/_build_chapter_pdf_sync, jobs.py for workers) before it grows further.",
+    "export_chapter_pdf loads up to 500 full-resolution panel images concurrently into memory via asyncio.gather + to_thread; unbounded fan-out can exhaust the default thread pool and RAM. Bound concurrency (semaphore ~4) and cap panels per export.",
+    "Batch generation runs in a fire-and-forget asyncio task (_spawn) with no persistence of remaining work; a backend restart marks jobs 'error' (startup reconcile) but the batch is not resumable — acceptable for MVP, document it.",
+    "_bump_stats is best-effort and only called on success paths, so failed-but-billed AI attempts (retries, provider fallbacks) are never counted — the credit meter will under-report spend, which is the exact failure mode this guardrail is meant to prevent.",
+    "Panel cap is applied at scene-decomposition time only (cap read from the manga doc at job start); changing the cap mid-generation has no effect and there is no global per-client cap, so a client can still create unlimited mangas x 30 panels."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_v2_features.py",
+    "/app/backend/tests/probe_batch_lifecycle.py",
+    "/app/backend/tests/probe_pdf_edge.py",
+    "/app/backend/tests/probe_pdf_perf.py"
+  ],
+  "success_rate": {"backend": "95% (54/57 tests; 3 failures are the PDF export edge-case bugs above)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "All data seeded directly in Mongo (test_database) with client_id prefix 'TEST_v2_<uuid>' / 'TEST_probe_*' / 'TEST_pdf*': mangas, chapters, panels + real PNGs uploaded to Emergent Object Storage via POST /api/upload/character-reference (no AI). All docs deleted by an autouse module-scoped cleanup fixture and by the probe scripts; verified 0 leftovers in every collection.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "None required (no auth). /app/memory/test_credentials.md exists; app uses anonymous client_id strings.",
+  "context_for_next_testing_agent": "DO NOT run tests/test_pipeline.py — EMERGENT_LLM_KEY budget is still exhausted (cost 1.88 > max 1.4); every text/image call fails, but the sanitized 503-style message path works and chapter/plan jobs correctly end with status='error' + 'AI service is temporarily unavailable (usage limit reached)'. Object Storage (upload/get) still works and is NOT budget-limited — use POST /api/upload/character-reference to mint a real image_url when seeding panels for PDF tests. Run: `cd /app/backend && python -m pytest tests/test_v2_features.py tests/test_health.py tests/test_edge_cases.py -q`. Expect the 3 TestPdfExportEdgeCases tests to pass once the Content-Disposition/KeyError/missing-object bugs are fixed. Frontend was never tested in this or the previous iteration — the new Settings credit meter, PDF download button and batch progress UI still need a Playwright pass (the batch UI likely shows false success, see batch issue).",
+  "rca_of_the_issue": "PDF export 500s: (1) f'attachment; filename=\"{filename}\"' is passed straight into Starlette response headers, which encodes headers as latin-1 — any non-ASCII chapter title raises UnicodeEncodeError inside the ASGI send, so FastAPI's exception handling is bypassed and the client sees a bare 'Internal Server Error'. (2) storage_service.get_object calls resp.raise_for_status(); a missing object raises HTTPError inside asyncio.gather with no per-task guard, propagating as an unhandled 500. (3) f\"{chapter['number']:02d}\" assumes the field exists. Batch false-success: _run_batch_chapters catches child exceptions but never records them, and unconditionally sets status='done', progress=100 at the end — child failures are only visible by polling each child job individually."
+}
