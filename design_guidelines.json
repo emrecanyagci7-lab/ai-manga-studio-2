@@ -1,0 +1,128 @@
+{
+  "theme": "dark",
+  "project_name": "AI Manga Studio",
+  "description": "A creative content generation SaaS web app and e-reader for AI-generated manga. It features dark mode, measured glassmorphism, neon purple/blue accents, and manga-inspired aesthetics.",
+  "typography": {
+    "fonts": {
+      "headings": "Bebas Neue, sans-serif",
+      "body": "Outfit, sans-serif",
+      "monospace": "JetBrains Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-5xl sm:text-6xl tracking-widest uppercase",
+      "h2": "text-4xl sm:text-5xl tracking-wider uppercase",
+      "h3": "text-2xl sm:text-3xl tracking-wide",
+      "h4": "text-xl sm:text-2xl",
+      "body": "text-base leading-relaxed tracking-wide",
+      "small": "text-sm tracking-wider"
+    },
+    "instructions": "Use Bebas Neue for all major headings, chapter titles, and hero text to evoke a graphic novel/manga cover feel. Use Outfit for body text and UI elements for clean legibility."
+  },
+  "colors": {
+    "background": {
+      "base": "#05050A",
+      "surface": "#111116",
+      "surface_glass": "rgba(17, 17, 22, 0.4)"
+    },
+    "accents": {
+      "primary": "#8B5CF6",
+      "primary_hover": "#7C3AED",
+      "secondary": "#3B82F6",
+      "destructive": "#EC4899"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "muted": "#475569"
+    },
+    "borders": {
+      "subtle": "rgba(255, 255, 255, 0.1)",
+      "focus": "rgba(139, 92, 246, 0.5)"
+    },
+    "instructions": "Strictly dark theme. NO teal green or Space Grotesk. NO generic purple gradients. Use solid neon accents against ink-black backgrounds. Gradients are only permitted for glowing borders or text effects, not large background fills."
+  },
+  "visual_enhancers": {
+    "glassmorphism": "Measured glass effect: `backdrop-blur-2xl bg-slate-950/40 border border-white/10`. Use for sticky headers, bottom nav, and floating dialogs.",
+    "textures": "Incorporate subtle CSS radial-gradients or SVG halftone/screentone dot patterns in the background to simulate printed manga paper in dark mode.",
+    "shadows": {
+      "neon_glow": "shadow-[0_0_15px_rgba(139,92,246,0.2)]",
+      "neon_glow_hover": "shadow-[0_0_25px_rgba(139,92,246,0.5)]",
+      "inner_rim": "shadow-[inset_0_1px_1px_rgba(255,255,255,0.1)]"
+    }
+  },
+  "layouts": {
+    "general": "Responsive mobile-first. Max-width constraints on readable content (e.g., max-w-4xl for reader).",
+    "navigation": "Desktop: Left Sidebar or Top Nav with glassmorphism. Mobile: Fixed Bottom Navigation Bar (`bottom-0 w-full backdrop-blur-2xl bg-slate-950/80 border-t border-white/10`).",
+    "home_hero": "Massive Bebas Neue typography. High-contrast asymmetrical layout with diagonal visual cuts and floating manga panels.",
+    "my_library": "Responsive Bento/Grid layout (`grid-cols-2 md:grid-cols-3 lg:grid-cols-4 lg:gap-8 gap-4`). Covers have aspect ratio 2:3 (standard manga format).",
+    "manga_detail": "Bento split-pane. Left side: Manga Cover, Info, and Story Bible. Right side: Scrollable Chapter list and Characters. Distinct 'Generate Chapter' triggers with SSE progress.",
+    "manga_reader": "Defaults to vertical scroll. `min-h-[100dvh]` flex-column shell. The manga panels are central, with absolute-positioned editable SVG overlays for dialogue bubbles."
+  },
+  "components": {
+    "Card": "Use Shadcn Card as base but heavily customize: `rounded-xl bg-slate-900/50 backdrop-blur-md border border-white/10 shadow-lg`. Add `hover:-translate-y-1 hover:border-violet-500/50 transition-all` for interactive cards.",
+    "ButtonPrimary": "`bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-lg px-6 py-3 transition-colors shadow-[0_0_15px_rgba(139,92,246,0.3)] hover:shadow-[0_0_25px_rgba(139,92,246,0.6)]`",
+    "DialogBubble": "Absolute positioned SVG elements over the manga images. Must have `contentEditable` or an input overlay for users to edit the text directly on the manga page. Style with `fill-white text-black border-2 border-black rounded-3xl`.",
+    "ProgressIndicator": "Use glowing neon linear progress bars for SSE generation queues. Add `framer-motion` pulsing effects."
+  },
+  "motion": {
+    "library": "framer-motion",
+    "patterns": {
+      "page_transition": "Fade in and slide up slightly (`initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}`).",
+      "list_stagger": "Stagger children in My Library and Chapter Lists for a cascading entrance.",
+      "hover_lift": "Lift cards slightly (`-translate-y-1` or `scale-105`) with a border color transition to neon purple on hover."
+    }
+  },
+  "image_urls": {
+    "hero_background": {
+      "url": "https://images.unsplash.com/photo-1668211834355-2cdf073f2351?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHwzfHxtYW5nYSUyMGFuaW1lJTIwbmVvbiUyMGN5YmVycHVua3xlbnwwfHx8fDE3ODc1ODQxNjV8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Dark neon cyberpunk alleyway for landing page hero background or Explore section header."
+    },
+    "character_concept_1": {
+      "url": "https://images.unsplash.com/photo-1743951896798-2936f661f939?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHw0fHxza2V0Y2glMjBjaGFyYWN0ZXIlMjBjb25jZXB0JTIwYXJ0fGVufDB8fHx8MTc4NzU4NDE2NXww&ixlib=rb-4.1.0&q=85",
+      "description": "Cloaked figure concept art. Use in Character Profiles or Story Bible reference."
+    },
+    "character_concept_2": {
+      "url": "https://images.unsplash.com/photo-1712684063563-dfc94d0bf89f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwzfHxza2V0Y2glMjBjaGFyYWN0ZXIlMjBjb25jZXB0JTIwYXJ0fGVufDB8fHx8MTc4NzU4NDE2NXww&ixlib=rb-4.1.0&q=85",
+      "description": "Sketch of character with a bird. Use as a sample AI generated character reference."
+    },
+    "comic_panel_layout": {
+      "url": "https://images.unsplash.com/photo-1629752187687-3d3c7ea3a21b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NjZ8MHwxfHNlYXJjaHwyfHxjb21pYyUyMGxheW91dCUyMHBhbmVsc3xlbnwwfHx8fDE3ODc1ODQxNjV8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Wireframe comic layout. Use as a placeholder for generating chapters or empty states in the Manga Reader."
+    },
+    "cyberpunk_diner": {
+      "url": "https://images.pexels.com/photos/31002131/pexels-photo-31002131.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Moody Tokyo diner with neon signs. Great for sample Manga cover image in My Library."
+    }
+  },
+  "accessibility": {
+    "contrast": "Ensure text over neon elements meets WCAG AA standards. Use pure white text over primary buttons.",
+    "testing": "All interactive elements (buttons, inputs, reader controls, chapter triggers) MUST include a descriptive `data-testid` attribute (e.g., `data-testid=\"generate-chapter-btn\"`)."
+  },
+  "instructions_to_main_agent": [
+    "Implement the UI exclusively using React and Tailwind CSS.",
+    "Use standard JavaScript (.js/.jsx) instead of TypeScript.",
+    "Incorporate lucide-react for iconography. Use Framer Motion for all micro-interactions.",
+    "DO NOT use raw HTML inputs; heavily customize Shadcn UI components for all forms.",
+    "For the Manga Reader: Images must be wrapped in a container where SVG dialogue bubbles can be overlaid and edited. Use absolute positioning and handle responsive scaling of the bubbles relative to the image.",
+    "Use sonner for toast notifications.",
+    "Theming: Enforce dark mode at the HTML/body root. The background should be `#05050A`. Do not use a generic centered App layout.",
+    "Mobile nav: Ensure a sticky bottom navigation bar is present on mobile breakpoints for quick access to Home, Library, Explore, Settings.",
+    "Client Auth: Generate and store a UUID in localStorage upon first visit for anonymous auth."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid the 'AI slop' aesthetic.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur).",
+    "You MUST NOT apply universal transition (e.g., transition: all). Add transitions for specific interactive elements excluding transforms.",
+    "You MUST NOT center align the app container, i.e., do not add `.App { text-align: center; }` in the css file.",
+    "Always use modern button styles like pill-shaped, or sharp buttons with interaction animations & color relevant to the app style.",
+    "NEVER use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Main agent relies on these image URLs. Missing categories = main agent will use placeholder text which is FORBIDDEN.",
+    "Prioritize using pre-existing components from src/components/ui when applicable.",
+    "Use sonner for toasts, located in /app/src/components/ui/sonner.jsx (or .tsx equivalent if pre-installed)."
+  ]
+}

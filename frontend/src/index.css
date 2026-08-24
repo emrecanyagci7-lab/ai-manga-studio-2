@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap");
+
+:root {
+  color-scheme: dark;
+  --background: 240 20% 4%;
+  --foreground: 210 40% 98%;
+  --card: 240 15% 8%;
+  --card-foreground: 210 40% 98%;
+  --popover: 240 15% 8%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 258 90% 66%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 217 91% 60%;
+  --secondary-foreground: 0 0% 100%;
+  --muted: 240 10% 14%;
+  --muted-foreground: 215 20% 65%;
+  --accent: 258 90% 66%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 336 84% 57%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 240 10% 18%;
+  --input: 240 10% 14%;
+  --ring: 258 90% 66%;
+  --radius: 0.75rem;
+}
+
+html, body, #root {
+  background: #05050A;
+  color: #F8FAFC;
+  min-height: 100%;
+  font-family: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  background-color: #05050A;
+  background-image:
+    radial-gradient(circle at 15% 10%, rgba(139, 92, 246, 0.10) 0%, transparent 40%),
+    radial-gradient(circle at 85% 90%, rgba(59, 130, 246, 0.08) 0%, transparent 45%),
+    radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: auto, auto, 22px 22px;
+}
+
+@layer base {
+  * { @apply border-border; }
+  h1, h2, h3, .font-display {
+    font-family: "Bebas Neue", "Outfit", sans-serif;
+    letter-spacing: 0.04em;
+  }
+  .font-mono, code { font-family: "JetBrains Mono", monospace; }
+}
+
+/* Halftone dot pattern helper */
+.halftone {
+  background-image: radial-gradient(rgba(255,255,255,0.08) 1px, transparent 1px);
+  background-size: 8px 8px;
+}
+
+/* Neon glow utilities */
+.glow-violet { box-shadow: 0 0 24px rgba(139, 92, 246, 0.35); }
+.glow-violet-strong { box-shadow: 0 0 40px rgba(139, 92, 246, 0.6); }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #05050A; }
+::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.3); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.6); }
+
+/* Ink splatter card */
+.ink-card {
+  background: linear-gradient(180deg, rgba(17,17,22,0.7), rgba(10,10,15,0.9));
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+}
+
+.diagonal-cut {
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 40px), calc(100% - 40px) 100%, 0 100%);
+}
+
+.marquee-track {
+  animation: marquee 40s linear infinite;
+}
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}

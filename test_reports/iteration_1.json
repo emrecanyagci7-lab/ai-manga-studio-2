@@ -1,0 +1,89 @@
+{
+  "summary": "Backend-only end-to-end test of AI Manga Studio (38 pytest tests). Full pipeline validated live against the public preview URL: story plan (Claude Sonnet 4.6) -> characters/chapters persisted -> Nano Banana character portrait -> user reference upload -> Emergent Object Storage serve via /api/files -> async chapter generation job (scene decomposition -> panels -> panel images -> dialogue bubbles) -> panels read -> bubble PATCH -> rename -> publish/unpublish -> explore -> cascade delete. All 19 pipeline tests PASSED (chapter job reached progress=100/status=done, chapter status 'ready', panels had image_url + well-formed bubbles, cover_url auto-set, images served with image/* content-type). 6 edge-case tests failed, exposing missing 404 handling and missing input validation. Two environment/architecture blockers found: (1) POST /api/mangas is synchronous and takes ~60-90s, intermittently returning 502 at the public ingress; (2) EMERGENT_LLM_KEY budget is now EXHAUSTED (cost 1.88 > max 1.4), so all further AI calls fail with 500.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "EMERGENT_LLM_KEY / all AI endpoints",
+        "issue": "LLM key budget exhausted after one full pipeline run. Every AI call now fails: 'litellm.BadRequestError: Budget has been exceeded! Current cost: 1.8846, Max budget: 1.4'. Gemini fallback fails too (same key). POST /api/mangas, generate-portrait and chapter generation are all blocked until budget is raised or a user key is supplied.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/mangas",
+        "issue": "Synchronous LLM plan generation takes 60-90s (measured 63.9s internally). Public ingress cuts off at ~60s and returned a Cloudflare 502 Bad Gateway HTML page on the first attempt (passed on a later, faster attempt) -> intermittent, user-visible failure. Should be converted to an async job (job_id + /api/jobs polling/SSE) like chapter generation, or the plan prompt must be split/shortened.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/mangas (error path)",
+        "issue": "On provider failure returns HTTP 500 with the raw provider exception in `detail`, leaking internal cost/budget values ('Current cost: 1.884, Max budget: 1.4') to the client. Should return 503 with a sanitized, user-facing message.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "POST /api/mangas",
+        "issue": "No input validation: chapter_count=0 is accepted and creates an unusable manga with 3 characters and 0 chapters; idea=\"\" reaches the LLM and returns 500. Add Pydantic constraints (idea: min_length, chapter_count: ge=1 le=20, creativity/genre enums).",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "storage_service.put_object / get_object",
+        "issue": "Blocking `requests` calls are made directly inside async endpoints (/api/files, upload-reference, generate-portrait) and inside the chapter worker loop. Each image upload/download blocks the FastAPI event loop, stalling every other request and the SSE stream. Wrap in asyncio.to_thread / use httpx.AsyncClient.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {"endpoint": "PATCH /api/mangas/{id}/rename", "issue": "Returns 200 {ok:true} for a non-existent manga_id (no matched_count check). Expected 404."},
+      {"endpoint": "POST /api/mangas/{id}/publish", "issue": "Returns 200 {ok:true} for a non-existent manga_id. Expected 404. Also allows publishing a manga with zero generated panels."},
+      {"endpoint": "DELETE /api/mangas/{id}", "issue": "Returns 200 {ok:true} for a non-existent manga_id. Expected 404."},
+      {"endpoint": "PATCH /api/panels/{id}/bubbles", "issue": "Returns 200 {ok:true} for a non-existent panel_id, and `bubbles` is an untyped `list` (no Pydantic bubble schema), so arbitrary junk can be persisted."},
+      {"endpoint": "All mutating endpoints", "issue": "No ownership check on client_id: any caller can rename/publish/delete any manga by id, and any client can generate chapters for another client's manga."},
+      {"endpoint": "GET /api/mangas?client_id=&published=", "issue": "When `published` is supplied the client_id filter is discarded (query is replaced, not merged), so ?published=true returns every published manga regardless of owner."},
+      {"endpoint": "GET /api/jobs/{id}/stream", "issue": "SSE generator is hard-capped at 600 x 0.8s (~8 min) and then emits status:timeout. A chapter with many panels (observed ~4 min for a small chapter) can exceed this; the frontend must handle 'timeout' and re-poll."},
+      {"endpoint": "POST /api/chapters/{id}/generate", "issue": "Job runs via bare asyncio.create_task with no task registry or crash recovery. A backend restart (uvicorn --reload does this on any file change) leaves the job stuck at status 'running' and the chapter stuck at 'generating' forever. No reconciliation on startup, and retry_count is stored but never used."},
+      {"endpoint": "POST /api/characters/{id}/generate-portrait", "issue": "`manga` is fetched without a None check; if the parent manga was deleted, manga.get(...) raises AttributeError -> unhandled 500."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_health.py",
+    "/app/backend/tests/test_pipeline.py",
+    "/app/backend/tests/test_edge_cases.py",
+    "/app/test_reports/pytest/pipeline_results.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Raise/refresh the EMERGENT_LLM_KEY budget (or ask the user for their own key) — the app is currently fully non-functional for any AI call (budget 1.4 exceeded, cost 1.88).",
+    "Convert POST /api/mangas into an async job (return job_id immediately, generate the plan in the background, poll /api/jobs/{id}) to avoid the 60s ingress timeout / 502.",
+    "Sanitize AI error responses: return 503 with a friendly message instead of echoing the raw litellm/provider exception (leaks cost/budget internals).",
+    "Add Pydantic validation to CreateMangaIn (idea min_length=10, chapter_count ge=1 le=20) and a typed Bubble model for PATCH /api/panels/{id}/bubbles.",
+    "Return 404 when rename/publish/delete/bubbles target a non-existent document (check matched_count).",
+    "Move blocking `requests` storage calls off the event loop (asyncio.to_thread or httpx.AsyncClient).",
+    "Add client_id ownership checks on rename/publish/delete/generate; fix GET /api/mangas so `published` filter still respects client_id.",
+    "Add startup reconciliation for jobs left in queued/running (mark as error or requeue) so chapters don't hang in 'generating' after a restart."
+  ],
+  "critical_code_review_comments": [
+    "server.py:119 create_manga performs a 60-90s blocking-in-request LLM call — architecturally incompatible with the 60s public ingress timeout; must become a background job like _run_chapter_generation.",
+    "storage_service.py uses the synchronous `requests` library and is called from async handlers and from the chapter worker; every panel upload blocks the whole event loop.",
+    "server.py:248/259/265/538 use update_one/delete_one without inspecting matched_count/deleted_count, so all mutations silently succeed on unknown ids.",
+    "server.py:496 asyncio.create_task holds no reference (task can be GC'd) and there is no recovery for jobs interrupted by a process restart.",
+    "server.py:220 list_mangas overwrites the client_id filter when `published` is provided — data-leak across clients.",
+    "BubbleIn.bubbles is a raw `list` — no schema validation on user-editable bubble data persisted to Mongo.",
+    "@app.on_event('startup'/'shutdown') is deprecated in current FastAPI; migrate to the lifespan context manager.",
+    "CORSMiddleware is configured with allow_credentials=True and allow_origins possibly '*', an invalid combination browsers reject."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_health.py",
+    "/app/backend/tests/test_pipeline.py",
+    "/app/backend/tests/test_edge_cases.py"
+  ],
+  "success_rate": {"backend": "84% (32/38 pytest tests passed; 19/19 full-pipeline happy path passed, 6 edge-case/validation tests failed)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "All test data was created and then deleted. Mangas created for client_id 'test-client-uuid-1234', 't' and 'probe' were removed; GET /api/mangas?client_id=test-client-uuid-1234 now returns []. Two orphan storage objects (user-refs/TEST_upload, portraits) remain in object storage — harmless.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "None required (anonymous client_id). /app/memory/test_credentials.md is an empty template — fine for this app since there is no auth.",
+  "context_for_next_testing_agent": "Tests live in /app/backend/tests/: test_health.py (smoke + 404s, all pass), test_pipeline.py (full AI pipeline, ~6 min, all 19 pass), test_edge_cases.py (validation/404 gaps, 6 expected failures documenting real defects). IMPORTANT: (1) The EMERGENT_LLM_KEY budget was exhausted during this run — until it is refreshed every AI endpoint returns 500 'Budget has been exceeded' and test_pipeline.py cannot pass. (2) test_pipeline.py::test_00 hits POST /api/mangas through the public ingress and is expected to fail with 502 until creation becomes async; test_01 deliberately uses INTERNAL_API (localhost:8001) as a documented workaround so the rest of the pipeline can be exercised — remove that workaround once creation is async. (3) Because /app/backend/tests is inside the uvicorn --reload watch path, editing test files restarts the backend and kills in-flight generation jobs; do not edit tests while a pipeline run is in progress. (4) Image gen is slow: allow >=900s for chapter jobs.",
+  "rca_of_the_issue": "502 on POST /api/mangas: the endpoint awaits a single large Claude Sonnet 4.6 completion producing the whole story plan (title, logline, synopsis, world, characters, chapter outline). Measured 63.9s against localhost:8001 with HTTP 200, while the same request through the public ingress returned a Cloudflare 502 page at ~60s — i.e. the backend is correct but exceeds the gateway's request timeout, making the failure intermittent and dependent on model latency. Fix by returning a job_id immediately and streaming/polling progress. Budget exhaustion: a single end-to-end run (1 plan + 1 scene decomposition + 1 portrait + N panel images via Nano Banana) consumed ~1.88 of the 1.4 max budget on the shared key, so all subsequent AI calls fail; image generation is the dominant cost driver, so panel counts per chapter should be capped and the budget raised."
+}
