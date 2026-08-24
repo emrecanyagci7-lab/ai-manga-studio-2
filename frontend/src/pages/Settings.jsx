@@ -30,7 +30,7 @@ export default function Settings() {
       const { data } = await api.get("/usage/summary", { params: { client_id: cid } });
       setUsage(data);
     } catch {
-      toast.error("Could not load usage");
+      toast.error("Kullanım verisi yüklenemedi");
     } finally {
       setLoading(false);
     }
@@ -42,53 +42,53 @@ export default function Settings() {
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
       <div className="flex items-end justify-between mb-8 gap-4">
         <div>
-          <div className="text-xs tracking-[0.3em] uppercase text-violet-400 mb-2">// Studio Config</div>
-          <h1 className="font-display text-5xl tracking-widest uppercase">Settings</h1>
+          <div className="text-xs tracking-[0.3em] uppercase text-violet-400 mb-2">// Stüdyo Ayarları</div>
+          <h1 className="font-display text-5xl tracking-widest uppercase">Ayarlar</h1>
         </div>
         <Button data-testid="usage-refresh" variant="outline" className="border-white/15" onClick={load}>
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><RefreshCw className="w-4 h-4 mr-2" /> Refresh</>}
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><RefreshCw className="w-4 h-4 mr-2" /> Yenile</>}
         </Button>
       </div>
 
       {/* Usage meter */}
       <section className="mb-10">
         <div className="mb-4">
-          <h2 className="font-display text-2xl tracking-widest uppercase">Credit Meter</h2>
-          <p className="text-sm text-slate-400 mt-1">Cumulative AI usage across all your mangas on this device.</p>
+          <h2 className="font-display text-2xl tracking-widest uppercase">Kredi Sayacı</h2>
+          <p className="text-sm text-slate-400 mt-1">Bu cihazdaki tüm mangalarının toplam yapay zekâ kullanımı.</p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatTile icon={Cpu} label="Text Calls" value={usage?.totals?.text_calls ?? 0} hint="Story bibles + scene decomp" />
-          <StatTile icon={ImageIcon} label="Image Calls" value={usage?.totals?.image_calls ?? 0} hint="Panels + portraits" />
-          <StatTile icon={BookOpen} label="Chapters Done" value={usage?.totals?.chapters_generated ?? 0} hint={`${usage?.totals?.panels_generated ?? 0} panels drawn`} />
+          <StatTile icon={Cpu} label="Metin Çağrısı" value={usage?.totals?.text_calls ?? 0} hint="Hikâye rehberi + sahne planı" />
+          <StatTile icon={ImageIcon} label="Görsel Çağrısı" value={usage?.totals?.image_calls ?? 0} hint="Paneller + portreler" />
+          <StatTile icon={BookOpen} label="Biten Bölüm" value={usage?.totals?.chapters_generated ?? 0} hint={`${usage?.totals?.panels_generated ?? 0} panel çizildi`} />
           <StatTile
             icon={DollarSign}
-            label="Est. Credits"
+            label="Tahmini Kredi"
             value={`$${(usage?.estimated_credits_spent_usd ?? 0).toFixed(2)}`}
-            hint="Rough estimate — see provider dashboard"
+            hint="Kaba tahmin — gerçek tutar sağlayıcı panelinde"
           />
         </div>
         <div className="mt-6 ink-card p-4 border border-violet-500/20 bg-violet-500/5">
           <p className="text-sm text-slate-300 leading-relaxed">
-            <span className="text-violet-300 font-semibold">Guardrail tip:</span> Each manga has a cap for panels-per-chapter (default 8). Adjust it from the manga detail page. Lower caps = smaller bills.
+            <span className="text-violet-300 font-semibold">Koruma önerisi:</span> Her manga için bölüm başına panel limiti bulunur (varsayılan 8). Bunu manga detay sayfasından değiştirebilirsin. Daha düşük limit = daha az maliyet.
           </p>
         </div>
       </section>
 
       <section className="space-y-4">
-        <h2 className="font-display text-2xl tracking-widest uppercase mb-2">Studio</h2>
+        <h2 className="font-display text-2xl tracking-widest uppercase mb-2">Stüdyo</h2>
         <div className="ink-card p-6 space-y-4">
           <div>
-            <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Anonymous Client ID</div>
+            <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Anonim Kullanıcı Kimliği</div>
             <div className="font-mono text-sm break-all text-slate-300" data-testid="settings-client-id">{cid}</div>
-            <p className="text-xs text-slate-500 mt-2">Your library is tied to this device. Signup not required for MVP.</p>
+            <p className="text-xs text-slate-500 mt-2">Kütüphanen bu cihaza bağlı. MVP için kayıt gerekmez.</p>
           </div>
           <div>
-            <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Text Model</div>
-            <div className="text-sm text-slate-300">Claude Sonnet 4.6 <span className="text-slate-500">(primary)</span> · Gemini 3 Flash <span className="text-slate-500">(fallback)</span></div>
+            <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Metin Modeli</div>
+            <div className="text-sm text-slate-300">Claude Sonnet 4.6 <span className="text-slate-500">(birincil)</span> · Gemini 3 Flash <span className="text-slate-500">(yedek)</span></div>
           </div>
           <div>
-            <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Image Model</div>
-            <div className="text-sm text-slate-300">Gemini Nano Banana <span className="text-slate-500">(reference-image editing)</span></div>
+            <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Görsel Modeli</div>
+            <div className="text-sm text-slate-300">Gemini Nano Banana <span className="text-slate-500">(referans görsel düzenleme)</span></div>
           </div>
         </div>
       </section>

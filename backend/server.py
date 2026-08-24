@@ -111,12 +111,12 @@ def _sanitize_ai_error(e: Exception) -> str:
     msg = str(e)
     low = msg.lower()
     if "budget" in low and "exceed" in low:
-        return "AI service is temporarily unavailable (usage limit reached). Please try again later."
+        return "Yapay zekâ servisi geçici olarak kullanılamıyor (kullanım limitine ulaşıldı). Lütfen daha sonra tekrar deneyin."
     if "rate limit" in low or "429" in low:
-        return "AI service is busy. Please try again in a moment."
+        return "Yapay zekâ servisi meşgul. Lütfen kısa süre sonra tekrar deneyin."
     if "timeout" in low:
-        return "AI service timed out. Please try again."
-    return "AI generation failed. Please try again."
+        return "Yapay zekâ servisi zaman aşımına uğradı. Lütfen tekrar deneyin."
+    return "Yapay zekâ üretimi başarısız oldu. Lütfen tekrar deneyin."
 
 
 # ---------------- Startup ----------------
@@ -163,7 +163,7 @@ async def download_file(path: str):
         data, ct = await asyncio.to_thread(get_object, path)
     except Exception as e:
         logger.error(f"File download failed for {path}: {e}")
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=404, detail="Bulunamadı")
     return Response(content=data, media_type=ct, headers={"Cache-Control": "public, max-age=86400"})
 
 
@@ -171,7 +171,7 @@ async def download_file(path: str):
 async def upload_character_ref(file: UploadFile = File(...), client_id: str = Form(...)):
     ext = (file.filename.rsplit(".", 1)[-1] if "." in file.filename else "png").lower()
     if ext not in ("png", "jpg", "jpeg", "webp"):
-        raise HTTPException(400, "Unsupported image type")
+        raise HTTPException(400, "Desteklenmeyen görsel türü")
     data = await file.read()
     storage_path = await asyncio.to_thread(upload_image, data, f"user-refs/{client_id}", ext)
     return {"storage_path": storage_path, "url": f"/api/files/{storage_path}"}
@@ -205,7 +205,7 @@ async def _run_plan_generation(job_id: str, manga_id: str, body_dict: dict):
 
         # Fill in manga details
         await db.mangas.update_one({"id": manga_id}, {"$set": {
-            "title": plan.get("title", "Untitled Manga"),
+            "title": plan.get("title", "İsimsiz Manga"),
             "logline": plan.get("logline", ""),
             "synopsis": plan.get("synopsis", ""),
             "world": plan.get("world", {}),
@@ -220,7 +220,7 @@ async def _run_plan_generation(job_id: str, manga_id: str, body_dict: dict):
             doc = {
                 "id": new_id(),
                 "manga_id": manga_id,
-                "name": ch.get("name", "Unnamed"),
+                "name": ch.get("name", "İsimsiz"),
                 "role": ch.get("role", "supporting"),
                 "age": ch.get("age", ""),
                 "appearance": ch.get("appearance", ""),
@@ -239,7 +239,7 @@ async def _run_plan_generation(job_id: str, manga_id: str, body_dict: dict):
                 "id": new_id(),
                 "manga_id": manga_id,
                 "number": c.get("number", 1),
-                "title": c.get("title", "Untitled Chapter"),
+                "title": c.get("title", "İsimsiz Bölüm"),
                 "summary": c.get("summary", ""),
                 "status": "outline",
                 "scenes_count": 0,
@@ -286,7 +286,7 @@ async def create_manga(body: CreateMangaIn):
     shell = {
         "id": manga_id,
         "client_id": body.client_id,
-        "title": "Weaving story...",
+        "title": "Hikâye örülüyor...",
         "logline": "",
         "synopsis": "",
         "world": {},
@@ -349,7 +349,7 @@ async def explore_mangas():
 async def get_manga(manga_id: str):
     manga = await db.mangas.find_one({"id": manga_id}, {"_id": 0})
     if not manga:
-        raise HTTPException(404, "Manga not found")
+        raise HTTPException(404, "Manga bulunamadı")
     characters = await db.characters.find({"manga_id": manga_id}, {"_id": 0}).to_list(50)
     chapters = await db.chapters.find({"manga_id": manga_id}, {"_id": 0}).sort("number", 1).to_list(200)
     return {"manga": manga, "characters": characters, "chapters": chapters}
@@ -359,7 +359,7 @@ async def get_manga(manga_id: str):
 async def rename_manga(manga_id: str, body: RenameIn):
     res = await db.mangas.update_one({"id": manga_id}, {"$set": {"title": body.title, "updated_at": now_iso()}})
     if res.matched_count == 0:
-        raise HTTPException(404, "Manga not found")
+        raise HTTPException(404, "Manga bulunamadı")
     return {"ok": True}
 
 
@@ -369,7 +369,7 @@ async def publish_manga(manga_id: str, body: PublishIn):
     upd["published_at"] = now_iso() if body.is_published else None
     res = await db.mangas.update_one({"id": manga_id}, {"$set": upd})
     if res.matched_count == 0:
-        raise HTTPException(404, "Manga not found")
+        raise HTTPException(404, "Manga bulunamadı")
     return {"ok": True}
 
 
@@ -377,7 +377,7 @@ async def publish_manga(manga_id: str, body: PublishIn):
 async def delete_manga(manga_id: str):
     res = await db.mangas.delete_one({"id": manga_id})
     if res.deleted_count == 0:
-        raise HTTPException(404, "Manga not found")
+        raise HTTPException(404, "Manga bulunamadı")
     await db.characters.delete_many({"manga_id": manga_id})
     await db.chapters.delete_many({"manga_id": manga_id})
     await db.scenes.delete_many({"manga_id": manga_id})
@@ -392,10 +392,10 @@ async def delete_manga(manga_id: str):
 async def generate_portrait(character_id: str):
     char = await db.characters.find_one({"id": character_id}, {"_id": 0})
     if not char:
-        raise HTTPException(404, "Character not found")
+        raise HTTPException(404, "Karakter bulunamadı")
     manga = await db.mangas.find_one({"id": char["manga_id"]}, {"_id": 0})
     if not manga:
-        raise HTTPException(404, "Parent manga not found")
+        raise HTTPException(404, "Bağlı manga bulunamadı")
 
     prompt = CHARACTER_PORTRAIT_PROMPT.format(
         art_style=manga.get("art_style", "Manga-inspired"),
@@ -423,10 +423,10 @@ async def generate_portrait(character_id: str):
 async def upload_reference(character_id: str, file: UploadFile = File(...)):
     char = await db.characters.find_one({"id": character_id})
     if not char:
-        raise HTTPException(404, "Character not found")
+        raise HTTPException(404, "Karakter bulunamadı")
     ext = (file.filename.rsplit(".", 1)[-1] if "." in file.filename else "png").lower()
     if ext not in ("png", "jpg", "jpeg", "webp"):
-        raise HTTPException(400, "Unsupported image type")
+        raise HTTPException(400, "Desteklenmeyen görsel türü")
     data = await file.read()
     storage_path = await asyncio.to_thread(upload_image, data, f"portraits/{char['manga_id']}", ext)
     url = f"/api/files/{storage_path}"
@@ -612,7 +612,7 @@ async def _run_chapter_generation(job_id: str, manga_id: str, chapter_id: str):
 async def generate_chapter(chapter_id: str):
     chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
     if not chapter:
-        raise HTTPException(404, "Chapter not found")
+        raise HTTPException(404, "Bölüm bulunamadı")
     # Delete previous scenes/panels for retry
     await db.scenes.delete_many({"chapter_id": chapter_id})
     await db.panels.delete_many({"chapter_id": chapter_id})
@@ -675,11 +675,11 @@ async def _run_batch_chapters(batch_id: str, manga_id: str, jobs: list):
 async def batch_generate(manga_id: str, body: BatchGenerateIn):
     manga = await db.mangas.find_one({"id": manga_id}, {"_id": 0})
     if not manga:
-        raise HTTPException(404, "Manga not found")
+        raise HTTPException(404, "Manga bulunamadı")
 
     chapters = await db.chapters.find({"id": {"$in": body.chapter_ids}, "manga_id": manga_id}, {"_id": 0}).to_list(len(body.chapter_ids))
     if not chapters:
-        raise HTTPException(404, "No matching chapters")
+        raise HTTPException(404, "Eşleşen bölüm yok")
 
     # Order by chapter number
     chapters.sort(key=lambda c: c["number"])
@@ -728,7 +728,7 @@ async def set_panel_cap(manga_id: str, body: PanelCapIn):
         {"$set": {"max_panels_per_chapter": body.max_panels_per_chapter, "updated_at": now_iso()}},
     )
     if res.matched_count == 0:
-        raise HTTPException(404, "Manga not found")
+        raise HTTPException(404, "Manga bulunamadı")
     return {"ok": True, "max_panels_per_chapter": body.max_panels_per_chapter}
 
 
@@ -847,14 +847,14 @@ def _build_chapter_pdf_sync(panel_docs: list, images_bytes: list, chapter_title:
 async def export_chapter_pdf(chapter_id: str):
     chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
     if not chapter:
-        raise HTTPException(404, "Chapter not found")
+        raise HTTPException(404, "Bölüm bulunamadı")
     panels = await db.panels.find(
         {"chapter_id": chapter_id, "status": "ready", "image_url": {"$ne": None}},
         {"_id": 0},
     ).sort([("scene_order", 1), ("order", 1)]).to_list(500)
 
     if not panels:
-        raise HTTPException(400, "Chapter has no ready panels to export")
+        raise HTTPException(400, "Bu bölümde dışa aktarılacak hazır panel yok")
 
     async def fetch(p):
         try:
@@ -869,7 +869,7 @@ async def export_chapter_pdf(chapter_id: str):
     # Filter out failed panels while keeping alignment
     valid_pairs = [(p, b) for p, b in zip(panels, images_bytes) if b]
     if not valid_pairs:
-        raise HTTPException(502, "All panel images are unavailable")
+        raise HTTPException(502, "Tüm panel görselleri kullanılamıyor")
 
     panels_ok = [p for p, _ in valid_pairs]
     bytes_ok = [b for _, b in valid_pairs]
@@ -894,7 +894,7 @@ async def export_chapter_pdf(chapter_id: str):
 async def get_job(job_id: str):
     doc = await db.generation_jobs.find_one({"id": job_id}, {"_id": 0})
     if not doc:
-        raise HTTPException(404, "Job not found")
+        raise HTTPException(404, "İş bulunamadı")
     return doc
 
 
@@ -932,7 +932,7 @@ async def update_bubbles(panel_id: str, body: BubbleIn):
     bubbles_dump = [b.model_dump() for b in body.bubbles]
     res = await db.panels.update_one({"id": panel_id}, {"$set": {"bubbles": bubbles_dump}})
     if res.matched_count == 0:
-        raise HTTPException(404, "Panel not found")
+        raise HTTPException(404, "Panel bulunamadı")
     return {"ok": True}
 
 

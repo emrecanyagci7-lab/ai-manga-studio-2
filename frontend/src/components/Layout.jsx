@@ -4,11 +4,11 @@ import { Home, Library, Compass, Plus, Settings as SettingsIcon } from "lucide-r
 import { Toaster } from "sonner";
 
 const navItems = [
-  { to: "/", label: "Home", icon: Home, testid: "nav-home" },
-  { to: "/create", label: "Create", icon: Plus, testid: "nav-create" },
-  { to: "/library", label: "Library", icon: Library, testid: "nav-library" },
-  { to: "/explore", label: "Explore", icon: Compass, testid: "nav-explore" },
-  { to: "/settings", label: "Settings", icon: SettingsIcon, testid: "nav-settings" },
+  { to: "/", label: "Ana Sayfa", icon: Home, testid: "nav-home" },
+  { to: "/create", label: "Oluştur", icon: Plus, testid: "nav-create" },
+  { to: "/library", label: "Kütüphane", icon: Library, testid: "nav-library" },
+  { to: "/explore", label: "Keşfet", icon: Compass, testid: "nav-explore" },
+  { to: "/settings", label: "Ayarlar", icon: SettingsIcon, testid: "nav-settings" },
 ];
 
 export default function Layout() {
@@ -22,7 +22,7 @@ export default function Layout() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
             <Link to="/" data-testid="logo-link" className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-md bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center font-display text-lg text-white">M</div>
-              <span className="font-display text-2xl tracking-widest">MANGA<span className="text-violet-400">.STUDIO</span></span>
+              <span className="font-display text-2xl tracking-widest">MANGA<span className="text-violet-400">.STÜDYO</span></span>
             </Link>
             <nav className="hidden md:flex items-center gap-1">
               {navItems.map(({ to, label, icon: Icon, testid }) => (

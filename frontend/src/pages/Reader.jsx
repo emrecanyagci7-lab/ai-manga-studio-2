@@ -80,7 +80,7 @@ export default function Reader() {
         setManga(m.manga);
         setChapters(m.chapters);
       } catch {
-        toast.error("Failed to load reader");
+        toast.error("Okuyucu yüklenemedi");
       } finally {
         setLoading(false);
       }
@@ -91,7 +91,6 @@ export default function Reader() {
     setPanels((ps) => ps.map((p) => {
       if (p.id !== panelId) return p;
       const newBubbles = p.bubbles.map((b) => (b.id === updated.id ? updated : b));
-      // debounce save
       clearTimeout(debounceRef.current[panelId]);
       debounceRef.current[panelId] = setTimeout(() => {
         api.patch(`/panels/${panelId}/bubbles`, { bubbles: newBubbles }).catch(() => {});
@@ -114,12 +113,12 @@ export default function Reader() {
             onClick={() => nav(`/manga/${mangaId}`)}
             className="text-slate-300 hover:text-violet-300 flex items-center gap-2"
           >
-            <X className="w-5 h-5" /> <span className="hidden sm:inline text-sm tracking-widest uppercase">Exit</span>
+            <X className="w-5 h-5" /> <span className="hidden sm:inline text-sm tracking-widest uppercase">Çık</span>
           </button>
           <div className="text-center">
-            <div className="font-display text-xl tracking-widest truncate max-w-[60vw]">{manga?.title || "Loading"}</div>
+            <div className="font-display text-xl tracking-widest truncate max-w-[60vw]">{manga?.title || "Yükleniyor"}</div>
             <div className="text-[10px] tracking-widest uppercase text-slate-400">
-              Chapter {chapters[currentIdx]?.number} — {chapters[currentIdx]?.title}
+              Bölüm {chapters[currentIdx]?.number} — {chapters[currentIdx]?.title}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -141,7 +140,7 @@ export default function Reader() {
         <div className="flex items-center justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-violet-400" /></div>
       ) : panels.length === 0 ? (
         <div className="max-w-md mx-auto text-center py-24 px-6">
-          <p className="text-slate-400">No panels ready yet. Generate this chapter first.</p>
+          <p className="text-slate-400">Henüz hazır panel yok. Önce bu bölümü üret.</p>
         </div>
       ) : (
         <div className="max-w-3xl mx-auto py-6 space-y-6 px-3 sm:px-6">
@@ -167,14 +166,14 @@ export default function Reader() {
             <div>
               {prevChapter && (
                 <Link data-testid="reader-prev-bottom" to={`/read/${mangaId}/${prevChapter.id}`}>
-                  <Button variant="outline" className="border-white/15"><ChevronLeft className="w-4 h-4 mr-2" /> Prev Chapter</Button>
+                  <Button variant="outline" className="border-white/15"><ChevronLeft className="w-4 h-4 mr-2" /> Önceki Bölüm</Button>
                 </Link>
               )}
             </div>
             <div>
               {nextChapter && (
                 <Link data-testid="reader-next-bottom" to={`/read/${mangaId}/${nextChapter.id}`}>
-                  <Button className="bg-violet-600 hover:bg-violet-500">Next Chapter <ChevronRight className="w-4 h-4 ml-2" /></Button>
+                  <Button className="bg-violet-600 hover:bg-violet-500">Sonraki Bölüm <ChevronRight className="w-4 h-4 ml-2" /></Button>
                 </Link>
               )}
             </div>

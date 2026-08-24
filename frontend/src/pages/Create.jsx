@@ -10,9 +10,30 @@ import { Label } from "../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Slider } from "../components/ui/slider";
 
-const GENRES = ["Fantasy", "Sci-Fi", "Slice of Life", "Action", "Romance", "Horror", "Mystery", "Sports", "Isekai"];
-const ART_STYLES = ["Manga-inspired", "Modern Manhwa", "Retro 90s Ink", "Watercolor Panel", "Cyber-Ink Noir"];
-const CREATIVITY = ["conservative", "balanced", "wild"];
+// Value = backend/AI (English preserved); Label = user-visible (Turkish)
+const GENRES = [
+  { value: "Fantasy", label: "Fantezi" },
+  { value: "Sci-Fi", label: "Bilim Kurgu" },
+  { value: "Slice of Life", label: "Günlük Yaşam" },
+  { value: "Action", label: "Aksiyon" },
+  { value: "Romance", label: "Romantik" },
+  { value: "Horror", label: "Korku" },
+  { value: "Mystery", label: "Gizem" },
+  { value: "Sports", label: "Spor" },
+  { value: "Isekai", label: "Isekai" },
+];
+const ART_STYLES = [
+  { value: "Manga-inspired", label: "Manga Esintili" },
+  { value: "Modern Manhwa", label: "Modern Manhwa" },
+  { value: "Retro 90s Ink", label: "Retro 90'lar Mürekkep" },
+  { value: "Watercolor Panel", label: "Sulu Boya Panel" },
+  { value: "Cyber-Ink Noir", label: "Siber Mürekkep Noir" },
+];
+const CREATIVITY = [
+  { value: "conservative", label: "Temkinli" },
+  { value: "balanced", label: "Dengeli" },
+  { value: "wild", label: "Vahşi" },
+];
 
 export default function Create() {
   const nav = useNavigate();
@@ -31,12 +52,12 @@ export default function Create() {
   const submit = async (e) => {
     e.preventDefault();
     if (idea.trim().length < 8) {
-      toast.error("Idea needs at least 8 characters");
+      toast.error("Fikir en az 8 karakter olmalı");
       return;
     }
     setLoading(true);
     setProgress(0);
-    setPhase("Sending idea to the studio...");
+    setPhase("Fikir stüdyoya gönderiliyor...");
     try {
       const { data } = await api.post("/mangas", {
         idea,
@@ -46,35 +67,33 @@ export default function Create() {
         creativity,
         client_id: getClientId(),
       });
-      setPhase("Weaving story bible...");
+      setPhase("Hikâye rehberi örülüyor...");
 
-      // Poll SSE for progress
       const es = new EventSource(`${API}/jobs/${data.job_id}/stream`);
       esRef.current = es;
       es.onmessage = (ev) => {
         try {
           const d = JSON.parse(ev.data);
           if (typeof d.progress === "number") setProgress(d.progress);
-          if (d.progress > 60) setPhase("Casting characters and chapters...");
+          if (d.progress > 60) setPhase("Karakterler ve bölümler kadrolanıyor...");
           if (d.status === "done") {
             es.close();
-            toast.success("Story plan ready");
+            toast.success("Hikâye planı hazır");
             nav(`/manga/${data.manga_id}`);
           } else if (d.status === "error") {
             es.close();
-            toast.error(d.error || "Generation failed");
+            toast.error(d.error || "Üretim başarısız oldu");
             setLoading(false);
           }
         } catch {}
       };
       es.onerror = () => {
         es.close();
-        // Fallback: navigate anyway and let detail page decide
         nav(`/manga/${data.manga_id}`);
       };
     } catch (err) {
       console.error(err);
-      toast.error(err?.response?.data?.detail || "Failed to start generation");
+      toast.error(err?.response?.data?.detail || "Üretim başlatılamadı");
       setLoading(false);
     }
   };
@@ -82,9 +101,9 @@ export default function Create() {
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
       <div className="mb-10">
-        <div className="text-xs tracking-[0.3em] uppercase text-violet-400 mb-2">// New Project</div>
-        <h1 className="font-display text-5xl md:text-6xl tracking-widest uppercase">Forge Your Manga</h1>
-        <p className="mt-3 text-slate-400 max-w-xl">One idea in, a full story bible out. You can generate chapters on demand afterwards.</p>
+        <div className="text-xs tracking-[0.3em] uppercase text-violet-400 mb-2">// Yeni Proje</div>
+        <h1 className="font-display text-5xl md:text-6xl tracking-widest uppercase">Manganı Ör</h1>
+        <p className="mt-3 text-slate-400 max-w-xl">Tek bir fikir gir, eksiksiz bir hikâye rehberi çıkar. Bölümleri sonrasında talebe göre üretebilirsin.</p>
       </div>
 
       <motion.form
@@ -94,13 +113,13 @@ export default function Create() {
         className="ink-card p-6 md:p-10 space-y-8"
       >
         <div>
-          <Label htmlFor="idea" className="uppercase tracking-widest text-xs text-slate-300">The Spark</Label>
+          <Label htmlFor="idea" className="uppercase tracking-widest text-xs text-slate-300">Kıvılcım</Label>
           <Textarea
             id="idea"
             data-testid="create-idea-input"
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
-            placeholder="A ronin whose blade whispers the memories of every soul it has cut..."
+            placeholder="Kılıcı kestiği her ruhun anılarını fısıldayan bir ronin..."
             rows={4}
             disabled={loading}
             className="mt-2 bg-slate-950/60 border-white/10 focus:border-violet-500 text-base"
@@ -109,24 +128,24 @@ export default function Create() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <Label className="uppercase tracking-widest text-xs text-slate-300">Genre</Label>
+            <Label className="uppercase tracking-widest text-xs text-slate-300">Tür</Label>
             <Select value={genre} onValueChange={setGenre} disabled={loading}>
               <SelectTrigger data-testid="create-genre-select" className="mt-2 bg-slate-950/60 border-white/10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="bg-slate-950 border-white/10">
-                {GENRES.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                {GENRES.map((g) => <SelectItem key={g.value} value={g.value}>{g.label}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div>
-            <Label className="uppercase tracking-widest text-xs text-slate-300">Art Style</Label>
+            <Label className="uppercase tracking-widest text-xs text-slate-300">Sanat Stili</Label>
             <Select value={artStyle} onValueChange={setArtStyle} disabled={loading}>
               <SelectTrigger data-testid="create-art-select" className="mt-2 bg-slate-950/60 border-white/10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="bg-slate-950 border-white/10">
-                {ART_STYLES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                {ART_STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -134,27 +153,27 @@ export default function Create() {
 
         <div>
           <div className="flex items-baseline justify-between mb-2">
-            <Label className="uppercase tracking-widest text-xs text-slate-300">Chapters</Label>
+            <Label className="uppercase tracking-widest text-xs text-slate-300">Bölüm Sayısı</Label>
             <span className="font-mono text-sm text-violet-300">{chapterCount[0]}</span>
           </div>
           <Slider data-testid="create-chapters-slider" value={chapterCount} onValueChange={setChapterCount} min={1} max={20} step={1} disabled={loading} />
         </div>
 
         <div>
-          <Label className="uppercase tracking-widest text-xs text-slate-300 mb-2 block">Creativity</Label>
+          <Label className="uppercase tracking-widest text-xs text-slate-300 mb-2 block">Yaratıcılık</Label>
           <div className="grid grid-cols-3 gap-3">
             {CREATIVITY.map((c) => (
               <button
                 type="button"
-                key={c}
-                data-testid={`create-creativity-${c}`}
-                onClick={() => setCreativity(c)}
+                key={c.value}
+                data-testid={`create-creativity-${c.value}`}
+                onClick={() => setCreativity(c.value)}
                 disabled={loading}
                 className={`py-3 rounded-lg border tracking-widest uppercase text-xs transition-colors ${
-                  creativity === c ? "border-violet-500 bg-violet-500/15 text-violet-200" : "border-white/10 text-slate-400 hover:bg-white/5"
+                  creativity === c.value ? "border-violet-500 bg-violet-500/15 text-violet-200" : "border-white/10 text-slate-400 hover:bg-white/5"
                 }`}
               >
-                {c}
+                {c.label}
               </button>
             ))}
           </div>
@@ -182,9 +201,9 @@ export default function Create() {
           className="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-lg py-6 tracking-widest uppercase shadow-[0_0_25px_rgba(139,92,246,0.4)]"
         >
           {loading ? (
-            <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Weaving story bible...</>
+            <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> Hikâye rehberi örülüyor...</>
           ) : (
-            <><Wand2 className="w-5 h-5 mr-2" /> Generate Manga Plan</>
+            <><Wand2 className="w-5 h-5 mr-2" /> Manga Planı Üret</>
           )}
         </Button>
       </motion.form>
