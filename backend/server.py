@@ -107,15 +107,17 @@ async def _bump_stats(manga_id: str, text_calls: int = 0, image_calls: int = 0, 
 
 
 def _sanitize_ai_error(e: Exception) -> str:
-    """Return a friendly error message and hide internal cost/budget details."""
+    """Kullanıcı dostu hata mesajı döndür; teknik ayrıntıları gizle."""
     msg = str(e)
     low = msg.lower()
-    if "budget" in low and "exceed" in low:
-        return "Yapay zekâ servisi geçici olarak kullanılamıyor (kullanım limitine ulaşıldı). Lütfen daha sonra tekrar deneyin."
-    if "rate limit" in low or "429" in low:
-        return "Yapay zekâ servisi meşgul. Lütfen kısa süre sonra tekrar deneyin."
-    if "timeout" in low:
+    if "google_api_key" in low or "api_key" in low or "api key" in low:
+        return "Google API anahtarı ayarlanmamış. Lütfen /app/backend/.env dosyasına GOOGLE_API_KEY ekle."
+    if "quota" in low or "429" in low or "rate limit" in low or "resource_exhausted" in low:
+        return "Yapay zekâ servisi geçici olarak meşgul (kota limiti). Lütfen kısa süre sonra tekrar deneyin."
+    if "timeout" in low or "timed out" in low:
         return "Yapay zekâ servisi zaman aşımına uğradı. Lütfen tekrar deneyin."
+    if "pollinations" in low or "connection" in low:
+        return "Görsel üretim servisine ulaşılamadı. Lütfen tekrar deneyin."
     return "Yapay zekâ üretimi başarısız oldu. Lütfen tekrar deneyin."
 
 
@@ -130,7 +132,7 @@ async def startup():
     try:
         stuck = await db.generation_jobs.update_many(
             {"status": {"$in": ["queued", "running"]}},
-            {"$set": {"status": "error", "error": "Interrupted by server restart", "updated_at": now_iso()}},
+            {"$set": {"status": "error", "error": "Sunucu yeniden başlatıldığı için iş yarıda kesildi", "updated_at": now_iso()}},
         )
         if stuck.modified_count:
             logger.warning(f"Reconciled {stuck.modified_count} stuck jobs")
@@ -388,35 +390,68 @@ async def delete_manga(manga_id: str):
 
 
 # ---------------- Characters ----------------
+async def _run_portrait_generation(job_id: str, character_id: str):
+    """Background worker: karakter portresi üret + kaydet."""
+    async def update(progress: int, status: str = "running", error: Optional[str] = None):
+        patch = {"progress": progress, "status": status, "updated_at": now_iso()}
+        if error:
+            patch["error"] = error
+        await db.generation_jobs.update_one({"id": job_id}, {"$set": patch})
+
+    try:
+        char = await db.characters.find_one({"id": character_id}, {"_id": 0})
+        if not char:
+            await update(0, "error", "Karakter bulunamadı")
+            return
+        manga = await db.mangas.find_one({"id": char["manga_id"]}, {"_id": 0})
+        if not manga:
+            await update(0, "error", "Bağlı manga bulunamadı")
+            return
+        await update(10)
+
+        prompt = CHARACTER_PORTRAIT_PROMPT.format(
+            art_style=manga.get("art_style", "Manga-inspired"),
+            name=char["name"],
+            appearance=char["appearance"],
+            personality=char["personality"],
+        )
+        img_bytes = await generate_image(prompt, session_id=f"portrait-{character_id}")
+        await _bump_stats(char["manga_id"], image_calls=1)
+        await update(85)
+
+        storage_path = await asyncio.to_thread(upload_image, img_bytes, f"portraits/{char['manga_id']}", "png")
+        url = f"/api/files/{storage_path}"
+        await db.characters.update_one(
+            {"id": character_id},
+            {"$set": {"reference_image_url": url, "user_uploaded_reference": False}},
+        )
+        await update(100, "done")
+    except Exception as e:
+        logger.error(f"Portrait job failed: {e}")
+        await update(0, "error", _sanitize_ai_error(e))
+
+
 @api.post("/characters/{character_id}/generate-portrait")
 async def generate_portrait(character_id: str):
     char = await db.characters.find_one({"id": character_id}, {"_id": 0})
     if not char:
         raise HTTPException(404, "Karakter bulunamadı")
-    manga = await db.mangas.find_one({"id": char["manga_id"]}, {"_id": 0})
-    if not manga:
-        raise HTTPException(404, "Bağlı manga bulunamadı")
 
-    prompt = CHARACTER_PORTRAIT_PROMPT.format(
-        art_style=manga.get("art_style", "Manga-inspired"),
-        name=char["name"],
-        appearance=char["appearance"],
-        personality=char["personality"],
-    )
-    try:
-        img_bytes = await generate_image(prompt, session_id=f"portrait-{character_id}")
-        await _bump_stats(char["manga_id"], image_calls=1)
-    except Exception as e:
-        logger.error(f"Portrait gen failed: {e}")
-        raise HTTPException(503, _sanitize_ai_error(e))
-
-    storage_path = await asyncio.to_thread(upload_image, img_bytes, f"portraits/{char['manga_id']}", "png")
-    url = f"/api/files/{storage_path}"
-    await db.characters.update_one(
-        {"id": character_id},
-        {"$set": {"reference_image_url": url, "user_uploaded_reference": False}},
-    )
-    return {"reference_image_url": url}
+    job_id = new_id()
+    await db.generation_jobs.insert_one({
+        "id": job_id,
+        "type": "portrait",
+        "target_id": character_id,
+        "manga_id": char["manga_id"],
+        "status": "queued",
+        "progress": 0,
+        "error": None,
+        "retry_count": 0,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    })
+    _spawn(_run_portrait_generation(job_id, character_id))
+    return {"job_id": job_id}
 
 
 @api.post("/characters/{character_id}/upload-reference")
@@ -464,12 +499,12 @@ async def _run_chapter_generation(job_id: str, manga_id: str, chapter_id: str):
         scene_data = await generate_json(
             SCENE_DECOMP_SYSTEM,
             SCENE_DECOMP_USER.format(
-                title=manga["title"],
+                title=manga.get("title", ""),
                 world_summary=json.dumps(manga.get("world", {})),
                 story_memory=memory_facts,
-                chapter_number=chapter["number"],
-                chapter_title=chapter["title"],
-                chapter_summary=chapter["summary"],
+                chapter_number=chapter.get("number", 0),
+                chapter_title=chapter.get("title", ""),
+                chapter_summary=chapter.get("summary", ""),
                 characters=char_list_str,
             ),
             session_id=f"scenes-{chapter_id}",
@@ -742,8 +777,8 @@ async def usage_summary(client_id: str = Query(...)):
         s = m.get("stats") or {}
         for k in ("text_calls", "image_calls", "panels_generated", "chapters_generated"):
             total[k] += int(s.get(k, 0) or 0)
-    # Rough token/credit estimate: image calls dominate. ~$0.04/image, ~$0.01/text call
-    est_credits = round(total["image_calls"] * 0.04 + total["text_calls"] * 0.01, 3)
+    # Ücretsiz katmandayız (Google Gemini free + Pollinations.ai) - kredi 0
+    est_credits = 0.0
     return {"totals": total, "estimated_credits_spent_usd": est_credits}
 
 

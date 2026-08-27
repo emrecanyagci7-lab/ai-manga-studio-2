@@ -1,73 +1,58 @@
-"""Emergent Object Storage helper."""
+"""Local filesystem storage — Emergent Object Storage'ın yerine geçen ücretsiz alternatif."""
 import os
 import uuid
 import logging
-import requests
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+STORAGE_ROOT = Path(os.environ.get("STORAGE_ROOT", "/app/backend/uploads"))
 APP_NAME = os.environ.get("APP_NAME", "ai-manga-studio")
 
-_storage_key = None
+_CT_MAP = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
 
 
 def init_storage(force: bool = False):
-    global _storage_key
-    if _storage_key and not force:
-        return _storage_key
-    emergent_key = os.environ.get("EMERGENT_LLM_KEY")
-    if not emergent_key:
-        raise RuntimeError("EMERGENT_LLM_KEY not set")
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": emergent_key}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    logger.info("Storage initialized")
-    return _storage_key
+    """No-op for local storage; ensures root exists."""
+    STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Local storage root: {STORAGE_ROOT}")
+    return "local"
+
+
+def _safe_path(relative_path: str) -> Path:
+    """Resolve relative_path under STORAGE_ROOT, reject traversal."""
+    candidate = (STORAGE_ROOT / relative_path).resolve()
+    root = STORAGE_ROOT.resolve()
+    if root not in candidate.parents and candidate != root:
+        raise ValueError("Invalid storage path")
+    return candidate
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data,
-        timeout=120,
-    )
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.put(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key, "Content-Type": content_type},
-            data=data,
-            timeout=120,
-        )
-    resp.raise_for_status()
-    return resp.json()
+    target = _safe_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return {"path": path, "size": len(data), "content_type": content_type}
 
 
 def get_object(path: str) -> tuple[bytes, str]:
-    key = init_storage()
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key},
-        timeout=60,
-    )
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.get(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key},
-            timeout=60,
-        )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    target = _safe_path(path)
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(path)
+    data = target.read_bytes()
+    ext = target.suffix.lstrip(".").lower()
+    return data, _CT_MAP.get(ext, "application/octet-stream")
 
 
 def upload_image(image_bytes: bytes, folder: str, ext: str = "png") -> str:
-    """Upload image and return storage path."""
+    """Save image and return storage path."""
     path = f"{APP_NAME}/{folder}/{uuid.uuid4().hex}.{ext}"
-    ct = f"image/{'jpeg' if ext.lower() in ('jpg', 'jpeg') else ext.lower()}"
-    result = put_object(path, image_bytes, ct)
-    return result["path"]
+    ct = _CT_MAP.get(ext.lower(), "image/png")
+    put_object(path, image_bytes, ct)
+    return path

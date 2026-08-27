@@ -1,80 +1,90 @@
-"""Prompt templates for AI Manga Studio pipeline."""
+"""AI Manga Studio prompt şablonları — Türkçe içerik + İngilizce görsel promptları."""
 
-STORY_PLAN_SYSTEM = """You are a master manga writer and world-builder. Create original, engaging manga stories.
-You MUST respond with valid JSON only, no prose, no markdown fences.
-Never reference existing manga franchises by name. Create fresh, original content."""
+STORY_PLAN_SYSTEM = """Sen usta bir manga yazarısın ve dünya kurucususun. Özgün, sürükleyici manga hikayeleri üret.
+Yanıtın YALNIZCA geçerli JSON olmalı — düz metin yok, markdown fence yok, açıklama yok.
+Var olan manga franchise isimlerine referans verme. Her zaman taze ve özgün içerik üret.
 
-STORY_PLAN_USER = """Generate a complete manga story plan based on the user's concept.
+ÖNEMLİ DİL KURALI:
+- Tüm başlıklar, karakter isimleri, sinopsisi, dünya açıklaması, güç sistemi, karakter kişilik ve geçmişleri, bölüm başlıkları ve özetleri MUTLAKA Türkçe olsun.
+- Sadece JSON anahtar adları (schema key'leri) İngilizce kalsın. Değerler Türkçe olacak.
+- Karakter görünüş açıklaması ('appearance' alanı) İngilizce olsun — çünkü görsel üretim modelinde kullanılacak."""
 
-Concept: {idea}
-Genre: {genre}
-Art Style: {art_style}
-Number of chapters: {chapter_count}
-Tone/Creativity: {creativity}
+STORY_PLAN_USER = """Kullanıcının fikrine dayanarak eksiksiz bir manga hikaye planı üret.
 
-Return ONLY valid JSON with this exact schema:
+Fikir: {idea}
+Tür: {genre}
+Sanat Stili: {art_style}
+Bölüm Sayısı: {chapter_count}
+Ton/Yaratıcılık: {creativity}
+
+YALNIZCA bu schema'daki geçerli JSON'u döndür:
 {{
-  "title": "string - catchy manga title",
-  "logline": "string - one sentence hook",
-  "synopsis": "string - 3-4 sentence overview",
+  "title": "string - çarpıcı Türkçe manga başlığı",
+  "logline": "string - tek cümlelik Türkçe tanıtım",
+  "synopsis": "string - 3-4 cümlelik Türkçe genel bakış",
   "world": {{
-    "setting": "string - where/when",
-    "power_system": "string - if applicable, else 'None'",
-    "atmosphere": "string - mood/vibe"
+    "setting": "string - Türkçe: nerede/ne zaman",
+    "power_system": "string - Türkçe: varsa güç sistemi, yoksa 'Yok'",
+    "atmosphere": "string - Türkçe: atmosfer/his"
   }},
-  "themes": ["string", "string"],
+  "themes": ["string Türkçe", "string Türkçe"],
   "characters": [
     {{
-      "name": "string",
+      "name": "string - Türkçe karakter adı",
       "role": "protagonist|antagonist|supporting",
-      "age": "string",
-      "appearance": "string - detailed physical description for image generation, 2-3 sentences focusing on hair, eyes, clothing, distinguishing features",
-      "personality": "string",
-      "backstory": "string - 2-3 sentences"
+      "age": "string - Türkçe (örn '17 yaşında')",
+      "appearance": "string - İNGİLİZCE detaylı fiziksel açıklama, görsel üretimi için: saç, göz, kıyafet, ayırt edici özellikler (2-3 cümle)",
+      "personality": "string - Türkçe kişilik",
+      "backstory": "string - Türkçe 2-3 cümle geçmiş"
     }}
   ],
   "chapters": [
-    {{"number": 1, "title": "string", "summary": "string - 2-3 sentence plot summary"}}
+    {{"number": 1, "title": "string - Türkçe bölüm başlığı", "summary": "string - Türkçe 2-3 cümle özet"}}
   ]
 }}
 
-Include 3-5 characters. Generate exactly {chapter_count} chapters."""
+Tam olarak 3-5 karakter dahil et. Tam olarak {chapter_count} bölüm üret."""
 
 
-SCENE_DECOMP_SYSTEM = """You are a manga scene director. Break chapters into cinematic scenes with panel-worthy beats.
-Respond with valid JSON only. No prose, no markdown."""
+SCENE_DECOMP_SYSTEM = """Sen bir manga sahne yönetmenisin. Bölümleri manga paneline uygun sinematik sahnelere böl.
+Yanıtın YALNIZCA geçerli JSON olmalı — düz metin yok, markdown yok.
 
-SCENE_DECOMP_USER = """Break this chapter into 3-5 cinematic scenes suitable for manga panels.
+ÖNEMLİ DİL KURALI:
+- Tüm diyaloglar ('dialogue' alanındaki 'text'), narration, iç düşünce, SFX metinleri Türkçe olsun.
+- Panel görsel açıklaması ('description'), 'expression_and_pose', 'background', 'camera' değerleri İngilizce olsun — bunlar görsel üretim modeline gidecek.
+- Lokasyon isimleri, karakter isimleri, sahne özeti Türkçe kalabilir."""
+
+SCENE_DECOMP_USER = """Bu bölümü manga panellerine uygun 3-5 sinematik sahneye böl.
 
 Manga: {title}
-World: {world_summary}
-Story Memory (canonical facts):
+Dünya: {world_summary}
+Hikaye Belleği (kanonik gerçekler):
 {story_memory}
 
-Chapter {chapter_number}: {chapter_title}
-Chapter Summary: {chapter_summary}
+Bölüm {chapter_number}: {chapter_title}
+Bölüm Özeti: {chapter_summary}
 
-Characters available: {characters}
+Mevcut karakterler: {characters}
 
-Return ONLY valid JSON:
+YALNIZCA bu geçerli JSON'u döndür:
 {{
   "scenes": [
     {{
       "order": 1,
-      "location": "string",
-      "time_of_day": "string",
-      "action_summary": "string - what happens",
-      "characters_present": ["character name"],
+      "location": "string - Türkçe mekan",
+      "time_of_day": "string - Türkçe zaman",
+      "action_summary": "string - Türkçe ne olduğu",
+      "characters_present": ["karakter adı"],
       "panels": [
         {{
           "order": 1,
           "camera": "wide|medium|close-up|extreme close-up|over-shoulder|dutch angle",
-          "description": "string - detailed visual description for image generation",
-          "characters_in_panel": ["character name"],
-          "expression_and_pose": "string",
-          "background": "string",
+          "description": "string - İNGİLİZCE detaylı görsel açıklama (görsel üretimi için)",
+          "characters_in_panel": ["karakter adı"],
+          "expression_and_pose": "string - İNGİLİZCE ifade ve poz",
+          "background": "string - İNGİLİZCE arkaplan",
           "dialogue": [
-            {{"character": "name or 'NARRATOR'", "text": "string", "type": "speech|thought|shout|whisper|narration|sfx"}}
+            {{"character": "karakter adı veya 'ANLATICI'", "text": "TÜRKÇE diyalog", "type": "speech|thought|shout|whisper|narration|sfx"}}
           ]
         }}
       ]
@@ -82,11 +92,11 @@ Return ONLY valid JSON:
   ]
 }}
 
-Rules:
-- 2-4 panels per scene
-- Not every panel needs dialogue; sometimes visual-only panels work best
-- Use SFX sparingly for impact
-- Keep dialogue punchy and character-consistent"""
+Kurallar:
+- Sahne başına 2-4 panel
+- Her panelde diyalog olmak zorunda değil; bazen sadece görsel panel daha iyi çalışır
+- SFX'i etkili anlar için tasarruflu kullan (kısa Türkçe SFX: PATLAMA, ÇAT, VJIINN)
+- Diyaloglar kısa, karakter-tutarlı ve TÜRKÇE olsun"""
 
 
 IMAGE_PROMPT_TEMPLATE = """{art_style} style manga panel, black and white ink with dynamic screentones.
@@ -97,7 +107,7 @@ Characters: {characters_desc}
 Expression/Pose: {expression_and_pose}
 Background: {background}
 
-Style guide: high-contrast manga art, bold ink lines, dramatic shading, screentone dot patterns, expressive character faces. NO text bubbles, NO dialogue text in image, NO written words. Clean composition ready for dialogue overlay."""
+Style guide: high-contrast manga art, bold ink lines, dramatic shading, screentone dot patterns, expressive character faces. NO text bubbles, NO dialogue text in image, NO written words, NO speech balloons. Clean composition ready for dialogue overlay."""
 
 
 CHARACTER_PORTRAIT_PROMPT = """{art_style} style character portrait for manga reference sheet.
@@ -106,4 +116,4 @@ Character: {name}
 Description: {appearance}
 Personality hint: {personality}
 
-Full body pose, neutral expression, front-facing, clean white/gray background, black and white manga ink art with screentones, high detail on face and clothing, model sheet quality. NO text, NO watermarks, NO logos."""
+Full body pose, neutral expression, front-facing, clean white/gray background, black and white manga ink art with screentones, high detail on face and clothing, model sheet quality. NO text, NO watermarks, NO logos, NO speech bubbles."""

@@ -176,7 +176,7 @@ class TestUsageSummary:
         body = r.json()
         assert body["totals"] == {"text_calls": 3, "image_calls": 5, "panels_generated": 5,
                                  "chapters_generated": 2, "mangas": 2}
-        assert body["estimated_credits_spent_usd"] == pytest.approx(5 * 0.04 + 3 * 0.01, abs=1e-6)
+        assert body["estimated_credits_spent_usd"] == 0.0  # free tier (Gemini + Pollinations) -> always 0
 
     def test_handles_manga_without_stats_field(self, http, mdb):
         cid = f"{TAG}_nostats"
@@ -232,7 +232,7 @@ class TestBatchGenerate:
         r = http.post(f"{API}/mangas/{nid()}/chapters/batch-generate",
                       json={"chapter_ids": [nid()]}, timeout=30)
         assert r.status_code == 404, r.text
-        assert "Manga not found" in r.text
+        assert "bulunamad" in r.text.lower()  # Turkish after migration
 
     def test_empty_chapter_ids_422(self, http, mdb):
         m = seed_manga(mdb, f"{TAG}_batch_empty")
@@ -256,7 +256,7 @@ class TestBatchGenerate:
         r = http.post(f"{API}/mangas/{m['id']}/chapters/batch-generate",
                       json={"chapter_ids": [nid(), nid()]}, timeout=30)
         assert r.status_code == 404, r.text
-        assert "No matching chapters" in r.text
+        assert "Eşleşen bölüm yok" in r.text  # Turkish after migration
 
     def test_chapters_from_other_manga_not_matched(self, http, mdb):
         m1 = seed_manga(mdb, f"{TAG}_batch_x1")
@@ -322,7 +322,7 @@ class TestPdfExport:
         c = seed_chapter(mdb, m["id"], 1, status="planned")
         r = http.get(f"{API}/chapters/{c['id']}/export/pdf", timeout=60)
         assert r.status_code == 400, r.text
-        assert "no ready panels" in r.text.lower()
+        assert "hazır panel yok" in r.text.lower()  # Turkish after migration
 
     def test_chapter_with_only_pending_panels_400(self, http, mdb):
         m = seed_manga(mdb, f"{TAG}_pdf_pending")
@@ -454,7 +454,7 @@ class TestPdfExportEdgeCases:
         internal = requests.get(
             f"http://localhost:8001/api/chapters/{ch['id']}/export/pdf", timeout=180)
         assert internal.status_code == 502, internal.status_code
-        assert "unavailable" in internal.text.lower(), internal.text[:200]
+        assert "kullanılamıyor" in internal.text.lower(), internal.text[:200]  # Turkish after migration
 
     def test_chapter_missing_number_field(self, http, mdb, seeded_image_url):
         m = seed_manga(mdb, f"{TAG}_edge")

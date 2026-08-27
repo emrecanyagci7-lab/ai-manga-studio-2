@@ -1,29 +1,35 @@
-"""AI providers: Claude Sonnet 4.6 (text primary), Gemini 3 Flash (fallback), Nano Banana (images)."""
+"""AI provider'ları: Metin -> Google Gemini (ücretsiz katman), Görsel -> Pollinations.ai (anahtarsız, ücretsiz)."""
 import os
 import json
-import base64
 import logging
 import re
 import asyncio
+import hashlib
+import urllib.parse
 from typing import Optional
-from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+
+import google.generativeai as genai
+import requests
 
 logger = logging.getLogger(__name__)
 
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "").strip()
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
 
-TEXT_PRIMARY = ("anthropic", "claude-sonnet-4-6")
-TEXT_FALLBACK = ("gemini", "gemini-3-flash-preview")
-IMAGE_MODEL = ("gemini", "gemini-3.1-flash-image-preview")
+# Google Gemini modelleri (ücretsiz katmanda mevcut)
+TEXT_PRIMARY = "gemini-2.0-flash-exp"
+TEXT_FALLBACK = "gemini-1.5-flash"
+
+# Pollinations.ai — API anahtarı yok, GET request, görsel byte'ları döner
+POLLINATIONS_URL = "https://image.pollinations.ai/prompt/{prompt}"
 
 
 def _extract_json(text: str) -> dict:
-    """Robust JSON extraction from LLM output."""
+    """LLM çıktısından JSON'ı robust şekilde çıkar."""
     text = text.strip()
-    # Strip markdown fences
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
-    # Find first { and last }
     start = text.find("{")
     end = text.rfind("}")
     if start >= 0 and end > start:
@@ -31,50 +37,86 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-async def _text_call(provider: str, model: str, system: str, user: str, session_id: str) -> str:
-    chat = LlmChat(api_key=EMERGENT_KEY, session_id=session_id, system_message=system).with_model(provider, model)
-    resp = await chat.send_message(UserMessage(text=user))
-    return resp if isinstance(resp, str) else str(resp)
+def _text_call_sync(model_name: str, system: str, user: str) -> str:
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY .env dosyasında ayarlı değil")
+    model = genai.GenerativeModel(model_name=model_name, system_instruction=system)
+    resp = model.generate_content(
+        user,
+        generation_config={
+            "temperature": 0.9,
+            "response_mime_type": "application/json",
+            "max_output_tokens": 8192,
+        },
+    )
+    if not resp.candidates or not resp.candidates[0].content.parts:
+        raise RuntimeError("Boş yanıt döndü")
+    return "".join(p.text for p in resp.candidates[0].content.parts if hasattr(p, "text") and p.text)
 
 
 async def generate_json(system: str, user: str, session_id: str, retries: int = 2) -> dict:
-    """Generate JSON via Claude primary, Gemini fallback."""
+    """Gemini üzerinden JSON üretimi. Primary + fallback + retry."""
+    if not GOOGLE_API_KEY:
+        # Retry döngüsüne girmeden hızlı başarısızlık
+        raise RuntimeError("GOOGLE_API_KEY .env dosyasında ayarlı değil")
     last_err = None
-    for provider, model in [TEXT_PRIMARY, TEXT_FALLBACK]:
+    for model_name in [TEXT_PRIMARY, TEXT_FALLBACK]:
         for attempt in range(retries):
             try:
-                raw = await _text_call(provider, model, system, user, f"{session_id}-{provider}-{attempt}")
+                raw = await asyncio.to_thread(_text_call_sync, model_name, system, user)
                 return _extract_json(raw)
             except Exception as e:
-                logger.warning(f"AI text call failed ({provider}, attempt {attempt}): {e}")
+                logger.warning(f"Gemini metin çağrısı başarısız ({model_name}, deneme {attempt}): {e}")
                 last_err = e
                 await asyncio.sleep(1.5 * (attempt + 1))
-    raise RuntimeError(f"All text providers failed: {last_err}")
+    raise RuntimeError(f"Tüm metin sağlayıcıları başarısız oldu: {last_err}")
 
 
-async def generate_image(prompt: str, session_id: str, reference_images: Optional[list[bytes]] = None) -> bytes:
-    """Generate a single image via Nano Banana. Optionally with reference images for character consistency."""
-    provider, model = IMAGE_MODEL
+def _fetch_pollinations_sync(prompt: str, seed: int) -> bytes:
+    # Pollinations URL yolunda %0A (newline) reddediliyor; whitespace'i normalize et
+    clean = " ".join(prompt.split())[:1500]
+    safe_prompt = urllib.parse.quote(clean, safe="")
+    url = POLLINATIONS_URL.format(prompt=safe_prompt)
+    params = {
+        "width": 768,
+        "height": 1024,
+        "seed": seed,
+        "nologo": "true",
+        "model": "flux",
+        "enhance": "true",
+    }
+    resp = requests.get(url, params=params, timeout=120)
+    resp.raise_for_status()
+    if not resp.content or len(resp.content) < 1000:
+        raise RuntimeError("Görsel çok küçük veya boş")
+    return resp.content
+
+
+# Pollinations aynı anda paralel çağrılırsa 429 dönüyor -> tekli semafor ile serileştir
+_pollinations_lock = asyncio.Semaphore(1)
+
+
+async def generate_image(prompt: str, session_id: str, reference_images: Optional[list] = None) -> bytes:
+    """Pollinations.ai üzerinden tek görsel üret. Reference images desteklenmiyor (ücretsiz alternatif kısıtlaması)."""
+    # Deterministik seed: process restart'a dayanıklı
+    seed = int(hashlib.md5(session_id.encode("utf-8")).hexdigest()[:8], 16) % (2**31)
+    backoffs = [5, 15, 30]
     last_err = None
-    for attempt in range(3):
-        try:
-            chat = LlmChat(api_key=EMERGENT_KEY, session_id=f"{session_id}-img-{attempt}",
-                           system_message="You are a professional manga panel illustrator.")
-            chat.with_model(provider, model).with_params(modalities=["image", "text"])
-
-            file_contents = []
-            if reference_images:
-                for img_bytes in reference_images[:3]:
-                    b64 = base64.b64encode(img_bytes).decode("utf-8")
-                    file_contents.append(ImageContent(image_base64=b64))
-
-            msg = UserMessage(text=prompt, file_contents=file_contents or None)
-            _text, images = await chat.send_message_multimodal_response(msg)
-            if not images:
-                raise RuntimeError("No image returned from model")
-            return base64.b64decode(images[0]["data"])
-        except Exception as e:
-            logger.warning(f"Image gen attempt {attempt} failed: {e}")
-            last_err = e
-            await asyncio.sleep(2 * (attempt + 1))
-    raise RuntimeError(f"Image generation failed after retries: {last_err}")
+    async with _pollinations_lock:
+        for attempt in range(3):
+            try:
+                return await asyncio.to_thread(_fetch_pollinations_sync, prompt, seed + attempt)
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                retry_after = None
+                if e.response is not None:
+                    retry_after = e.response.headers.get("Retry-After")
+                logger.warning(f"Pollinations HTTP {status} (deneme {attempt}); Retry-After={retry_after}")
+                last_err = e
+                wait = int(retry_after) if (retry_after and retry_after.isdigit()) else backoffs[attempt]
+                await asyncio.sleep(wait)
+            except Exception as e:
+                logger.warning(f"Pollinations görsel çağrısı başarısız (deneme {attempt}): {e}")
+                last_err = e
+                await asyncio.sleep(backoffs[attempt])
+    raise RuntimeError(f"Görsel üretimi başarısız: {last_err}")

@@ -111,12 +111,31 @@ export default function MangaDetail() {
   const generatePortrait = async (charId) => {
     setPortraitBusy((s) => ({ ...s, [charId]: true }));
     try {
-      await api.post(`/characters/${charId}/generate-portrait`);
-      toast.success("Portre üretildi");
-      await load();
+      const { data: job } = await api.post(`/characters/${charId}/generate-portrait`);
+      // SSE ile portre işini takip et
+      const es = new EventSource(`${API}/jobs/${job.job_id}/stream`);
+      streamRefs.current[`portrait-${charId}`] = es;
+      es.onmessage = (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          if (d.status === "done") {
+            es.close();
+            toast.success("Portre üretildi");
+            setPortraitBusy((s) => ({ ...s, [charId]: false }));
+            load();
+          } else if (d.status === "error") {
+            es.close();
+            toast.error(d.error || "Portre üretilemedi");
+            setPortraitBusy((s) => ({ ...s, [charId]: false }));
+          }
+        } catch {}
+      };
+      es.onerror = () => {
+        es.close();
+        setPortraitBusy((s) => ({ ...s, [charId]: false }));
+      };
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Portre üretilemedi");
-    } finally {
+      toast.error(e?.response?.data?.detail || "Portre başlatılamadı");
       setPortraitBusy((s) => ({ ...s, [charId]: false }));
     }
   };

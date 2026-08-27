@@ -62,9 +62,9 @@ export default function Settings() {
           <StatTile icon={BookOpen} label="Biten Bölüm" value={usage?.totals?.chapters_generated ?? 0} hint={`${usage?.totals?.panels_generated ?? 0} panel çizildi`} />
           <StatTile
             icon={DollarSign}
-            label="Tahmini Kredi"
+            label="Tahmini Maliyet"
             value={`$${(usage?.estimated_credits_spent_usd ?? 0).toFixed(2)}`}
-            hint="Kaba tahmin — gerçek tutar sağlayıcı panelinde"
+            hint="Ücretsiz katman — kota limiti içinde 0₺"
           />
         </div>
         <div className="mt-6 ink-card p-4 border border-violet-500/20 bg-violet-500/5">
@@ -84,11 +84,11 @@ export default function Settings() {
           </div>
           <div>
             <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Metin Modeli</div>
-            <div className="text-sm text-slate-300">Claude Sonnet 4.6 <span className="text-slate-500">(birincil)</span> · Gemini 3 Flash <span className="text-slate-500">(yedek)</span></div>
+            <div className="text-sm text-slate-300">Google Gemini 2.0 Flash <span className="text-slate-500">(birincil, ücretsiz katman)</span> · Gemini 1.5 Flash <span className="text-slate-500">(yedek)</span></div>
           </div>
           <div>
             <div className="text-[10px] tracking-widest uppercase text-violet-400 mb-1">Görsel Modeli</div>
-            <div className="text-sm text-slate-300">Gemini Nano Banana <span className="text-slate-500">(referans görsel düzenleme)</span></div>
+            <div className="text-sm text-slate-300">Pollinations.ai <span className="text-slate-500">(FLUX tabanlı, anahtarsız ücretsiz)</span></div>
           </div>
         </div>
       </section>

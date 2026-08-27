@@ -1,0 +1,63 @@
+{
+  "summary": "Backend-only migration verification for AI Manga Studio (Emergent LLM key + Emergent Object Storage -> Google Gemini text + Pollinations.ai images + local filesystem storage). Created /app/backend/tests/test_migration.py (23 tests) and re-ran the regression suites test_v2_features.py, test_health.py, test_edge_cases.py (test_pipeline.py skipped as instructed). Final: 83 passed / 1 failed out of 84. PASSED structural asserts: (a) no /app/backend/*.py references emergentintegrations or integrations.emergentagent.com; ai_service.py imports google.generativeai + Pollinations and no longer references LlmChat/UserMessage/ImageContent/EMERGENT_LLM_KEY; storage_service.py is pure local FS (no requests/httpx/aiohttp, STORAGE_ROOT-based) . (b) Local storage E2E: POST /api/upload/character-reference returns storage_path under 'ai-manga-studio/user-refs/', the file physically exists at /app/backend/uploads/<path> with byte-identical content, and GET /api/files/<path> returns the same bytes with content-type image/png; unknown path -> 404 {'detail':'Bulunamadi'}; unsupported extension -> 400. (c) Path traversal is safe: through the public ingress '../../etc/passwd' is normalised (200 SPA html) or rejected by Cloudflare (400) and encoded '..%2f' -> 400; hitting the backend directly with curl --path-as-is returns 404 'Bulunamadi' via storage_service._safe_path. No system file content ever leaked. (d) Text paths fail with the correct Turkish sanitized error: POST /api/mangas returns manga_id+job_id in <3s, its job ends status='error' with 'Google API anahtari ayarlanmamis...' and manga.plan_status='error'; chapter_count validation still enforces 1..20 (0 and 21 -> 422); POST /api/chapters/{id}/generate -> job status='error' with the same Turkish message and chapter.status='error'; batch-generate returns batch_id + 2 jobs, both children error with the Turkish message and the batch aggregates to status='error', failed_count=2, total_count=2. (e) PDF export still works on local storage: 200 application/pdf (%PDF magic) with baked bubbles from a locally-stored panel image. CRITICAL FAILURE: the Pollinations image path is BROKEN for every real app prompt (portrait endpoint returns 503) - root cause isolated below.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/characters/{id}/generate-portrait (and every panel image generation path)",
+        "issue": "Pollinations.ai returns HTTP 404 for all app prompts because ai_service._fetch_pollinations_sync url-encodes the RAW multi-line prompt: CHARACTER_PORTRAIT_PROMPT and IMAGE_PROMPT_TEMPLATE are triple-quoted multi-line strings, so newlines become %0A in the URL path and Pollinations answers '404 Not Found' (text/plain). Proven by bisection: the exact portrait prompt as-is -> 404 (with and without enhance=true); the SAME prompt with newlines collapsed ('  '.join(prompt.split())) -> 200 image/jpeg 49KB. Result: endpoint retries 3x then returns 503 'Gorsel uretim servisine ulasilamadi', i.e. NO image can ever be generated -> portraits and all panels are dead. Fix: normalise whitespace before quoting, e.g. `clean = ' '.join(prompt.split())[:1500]` then `urllib.parse.quote(clean, safe='')`.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/chapters/{id}/generate (_run_chapter_generation)",
+        "issue": "chapter['summary'] and chapter['number'] are accessed with direct dict indexing; a chapter doc lacking 'summary' raises KeyError -> job ends with the generic 'Yapay zeka uretimi basarisiz oldu' instead of a meaningful error (observed in backend log: \"Chapter job failed: 'summary'\"). Use chapter.get('summary','')."
+      },
+      {
+        "endpoint": "ai_service.generate_image",
+        "issue": "seed = abs(hash(session_id)) - Python string hash is randomised per process (PYTHONHASHSEED), so the 'consistency per character/panel' intent does not survive a backend restart. Use a stable hash (hashlib.md5) if determinism matters."
+      },
+      {
+        "endpoint": "ai_service.generate_json",
+        "issue": "When GOOGLE_API_KEY is empty the code still loops 2 models x 2 retries with 1.5-3s sleeps (~9s wasted) before failing on a locally-detectable condition. Short-circuit the missing-key case immediately."
+      },
+      {
+        "endpoint": "GET /api/usage/summary",
+        "issue": "estimated_credits_spent_usd is now hardcoded 0.0 (free tier). Correct for the migration, but confirm the Settings/usage UI does not still label it as spend."
+      },
+      {
+        "endpoint": "GET /api/chapters/{id}/export/pdf",
+        "issue": "Pre-existing (iteration_3): the 502 'Tum panel gorselleri kullanilamiyor' JSON body is stripped by the Cloudflare ingress, so the user sees a generic gateway page."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_migration.py",
+    "/app/backend/tests/test_v2_features.py",
+    "/app/test_reports/pytest/pytest_iter4_all.xml",
+    "/app/test_reports/pytest/pytest_iter4_migration.xml"
+  ],
+  "action_items": [
+    "CRITICAL: collapse whitespace/newlines in the Pollinations prompt before URL-encoding in ai_service._fetch_pollinations_sync (`' '.join(prompt.split())`, quote with safe='') - currently every image generation fails with 404 -> 503.",
+    "Use chapter.get('summary','') / .get('number', 0) in _run_chapter_generation to avoid KeyError masking the real AI error.",
+    "Optionally short-circuit generate_json when GOOGLE_API_KEY is empty instead of 4 retries, and use a stable hash for the Pollinations seed."
+  ],
+  "critical_code_review_comments": [
+    "ai_service.generate_image accepts reference_images and silently ignores it - callers (character-consistency panel generation) now lose reference conditioning entirely; document/flag this behavioural regression in the UI or drop the parameter.",
+    "storage_service._safe_path uses `root not in candidate.parents` which is correct, but put_object/get_object raise ValueError that server.py converts to a blanket 404 - a traversal attempt is indistinguishable from a missing file in logs.",
+    "/app/backend/server.py is still 949 lines (>700 guideline); split into routers.",
+    "_sanitize_ai_error maps any message containing 'connection' to the Pollinations message, so genuine Mongo/network errors will be reported to users as image-service failures."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_migration.py",
+    "/app/backend/tests/test_v2_features.py"
+  ],
+  "success_rate": {"backend": "98.8% (83/84 tests; the single failure is the real Pollinations image bug)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "All seed docs created directly in Mongo with client_id prefix TEST_mig_<uuid> and removed by a module-scoped autouse fixture; verified 0 TEST_-tagged docs remain. The 5 mangas left in Mongo are pre-existing docs from the main agent's manual runs (client_id 9a2c723c-..., plan_status=error), not created by me. Uploaded test PNGs remain under /app/backend/uploads/ai-manga-studio/user-refs/ (harmless).",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "No auth in this app; any client_id string works. /app/memory/test_credentials.md not required.",
+  "context_for_next_testing_agent": "New permanent suite: /app/backend/tests/test_migration.py (structural no-emergentintegrations asserts, local storage E2E + traversal, Turkish sanitized-error asserts for plan/chapter/batch jobs, Pollinations portrait, PDF export). Only TestPollinationsPortrait::test_generate_portrait_uses_pollinations fails - retest it after the newline-encoding fix; it should return 200 with a >5KB file under /app/backend/uploads/ai-manga-studio/portraits/. test_v2_features.py assertions were updated from English error strings to the new Turkish ones and usage credits to 0.0. Keep skipping test_pipeline.py while GOOGLE_API_KEY is empty. pytest.ini forces -n 2 --dist loadscope; use -n 0 for serial debugging. Untested (needs a real GOOGLE_API_KEY): successful story-plan generation, scene decomposition, Turkish content quality, batch status='partial'.",
+  "rca_of_the_issue": "Pollinations 404 RCA: prompts.py defines CHARACTER_PORTRAIT_PROMPT / IMAGE_PROMPT_TEMPLATE as multi-line strings; ai_service._fetch_pollinations_sync does urllib.parse.quote(prompt[:1500]) which encodes '\\n' as %0A inside the URL PATH segment. image.pollinations.ai rejects paths containing %0A with 404 Not Found (text/plain, 13 bytes). Reproduced deterministically 3/3 with the exact prompt and fixed 1/1 by replacing newlines with spaces (200, image/jpeg, 49260 bytes). The 3-attempt retry loop then raises, server.generate_portrait catches it and _sanitize_ai_error matches 'pollinations' -> 503 'Gorsel uretim servisine ulasilamadi'. So the error surface is correct; the request construction is the defect."
+}

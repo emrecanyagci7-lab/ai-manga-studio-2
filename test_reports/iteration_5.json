@@ -1,0 +1,45 @@
+{
+  "summary": "Backend-only retest of the iteration_4 fixes. (1) CRITICAL Pollinations 404 is FIXED: POST /api/characters/{id}/generate-portrait now returns 200 with reference_image_url under /api/files/ai-manga-studio/portraits/, the file exists on disk (55-60KB, valid JPEG magic bytes ff d8 ff), is served back with content-type image/*, and the character doc is updated (reference_image_url set, user_uploaded_reference=false). Backend log confirms the outbound URL now contains %20 instead of %0A. (2) MINOR chapter .get() fix verified: seeded a chapter doc with NO 'summary' and NO 'title'; job ends status='error' with the correct Turkish sanitized message 'Google API anahtari ayarlanmamis...' (no KeyError leak) and chapter.status='error'. (3) MINOR fast-fail verified: plan job created_at->updated_at delta measured from Mongo is <2s (was ~9s). (4) Stable md5 seed verified at unit level: generate_image with the same session_id yields seed == int(md5(session_id)[:8],16)%2**31 on both calls; E2E repeat portrait for the same character returned byte-identical 58647-byte images. (5) Full regression: test_migration.py + test_v2_features.py + test_health.py + test_edge_cases.py + new test_iter5_fixes.py = 90 tests; 89 passed in the parallel run, the 1 failure is an external Pollinations 429 rate-limit flake (passes in isolation - re-verified twice). test_pipeline.py skipped as instructed. No code changes made to application files.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/characters/{id}/generate-portrait (ai_service.generate_image)",
+        "issue": "Pollinations.ai returns HTTP 429 'Too Many Requests' under concurrent/back-to-back image requests. generate_image retries 3x with only 2s/4s/6s sleeps, so all 3 attempts get 429 and the endpoint returns 503 (message is correctly sanitized to the Turkish quota text). Reproduced whenever 2 portrait requests are in flight simultaneously; passes reliably when serialized. Panel generation is sequential so it is safer, but a chapter with many panels will still see intermittent panel-level 429 -> status='error'. Recommend honoring Retry-After / longer exponential backoff (e.g. 5/15/30s) and/or a global semaphore of 1 concurrent Pollinations call."
+      },
+      {
+        "endpoint": "ai_service.generate_image",
+        "issue": "reference_images parameter is still accepted and silently ignored (pre-existing note from iteration_4): character-consistency conditioning is lost; consistency now relies only on the deterministic seed + textual appearance."
+      },
+      {
+        "endpoint": "GET /api/chapters/{id}/export/pdf",
+        "issue": "Pre-existing: the 502 'Tum panel gorselleri kullanilamiyor' JSON body is stripped by the Cloudflare ingress (user sees a generic gateway page)."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter5_fixes.py",
+    "/app/backend/tests/test_migration.py",
+    "/app/test_reports/pytest/pytest_iter5_all.xml",
+    "/app/test_reports/pytest/pytest_iter5_fixes.xml"
+  ],
+  "action_items": [
+    "Optional hardening: add backoff/Retry-After handling (or a single-flight semaphore) for Pollinations 429s in ai_service.generate_image - currently 3 quick retries all fail under concurrency and the user gets a 503.",
+    "Decide on reference_images: either drop the unused parameter or document the loss of reference conditioning in the UI.",
+    "Long-standing: split /app/backend/server.py (950 lines) into routers."
+  ],
+  "critical_code_review_comments": [
+    "_fetch_pollinations_sync truncation to 1500 chars silently drops the tail of very long panel prompts (IMAGE_PROMPT_TEMPLATE with long descriptions) - log a warning when truncation occurs so lost prompt detail is diagnosable.",
+    "_sanitize_ai_error still maps any message containing 'connection' to the image-service message, so genuine Mongo/network errors are misreported to users.",
+    "generate_image only varies the seed on retry (seed+attempt); with the Pollinations prompt+seed cache this means a retry after a transient 429 is effectively a new image, breaking the determinism guarantee for that panel."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter5_fixes.py"],
+  "success_rate": {"backend": "100% (90/90 when image tests are serialized; 89/90 in the parallel run due to an external Pollinations 429)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Mongo docs seeded directly with client_id prefix TEST_it5_<uuid> (mangas/characters/chapters) and removed by a module-scoped autouse cleanup fixture. Generated portrait JPEGs remain under /app/backend/uploads/ai-manga-studio/portraits/ (harmless).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "No auth in this app; any client_id string works.",
+  "context_for_next_testing_agent": "All iteration_4 fixes are verified. GOOGLE_API_KEY is still empty, so every text path (plan, scene decomposition, chapter/batch generation) must end status='error' with 'Google API anahtari ayarlanmamis' - that is expected, not a bug. Image tests must be serialized (pytest -n 0) or Pollinations returns 429 and portrait endpoints answer 503; do not report that as a regression without re-running in isolation. New regression file: /app/backend/tests/test_iter5_fixes.py. test_pipeline.py remains unrunnable until a real GOOGLE_API_KEY is provided.",
+  "rca_of_the_issue": "Original CRITICAL: multi-line CHARACTER_PORTRAIT_PROMPT/IMAGE_PROMPT_TEMPLATE were URL-quoted verbatim, putting %0A in the Pollinations path -> 404 -> 3 retries -> 503. Fix (` ' '.join(prompt.split())[:1500] ` before quote) confirmed E2E: outbound URL now uses %20 only and returns a real JPEG. Remaining flakiness is purely the free Pollinations tier's per-IP concurrency rate limit (429), not a prompt-encoding problem."
+}

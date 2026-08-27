@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration-6 backend-only verification of the Pollinations hardening (asyncio.Semaphore(1) + backoffs [5,15,30] + Retry-After honoring). RESULT: the 429 flake is fixed at the application level, but the semaphore introduced a NEW user-facing failure mode on the public URL (ingress 502 timeout). Evidence: (1) New unit tests (test_iter6_concurrency.py::TestSemaphoreAndBackoffWiring) confirm _pollinations_lock is an asyncio.Semaphore, backoffs are [5,15,30], Retry-After: 1 is honored (sleeps == [1], succeeds on 2nd attempt), and default backoff sequence is exactly [5,15,30] before raising RuntimeError. All 3 PASSED. (2) Concurrency via INTERNAL url (test_iter6_concurrency_internal.py, run twice, -n 0): 2 rounds x 3 parallel POST /api/characters/{id}/generate-portrait = 6/6 HTTP 200, 3 distinct reference_image_urls per round, all files present under /app/backend/uploads/ai-manga-studio/portraits/ (>5KB, valid PNG/JPEG magic), character docs updated with reference_image_url + user_uploaded_reference=false. ZERO 429 in backend logs during both rounds. Serialization confirmed by per-request latencies: r1 45.0s / 90.7s / 136.8s (wall 136.8s), r2 43.3s / 88.4s / 133.5s (wall 133.5s). (3) Same test via the PUBLIC url (REACT_APP_BACKEND_URL) FAILS: round1 = 1x200 + 2x502 Cloudflare HTML, round2 = 3x502. The queued (semaphore-blocked) requests exceed the ~60s public ingress response timeout, so the client gets a gateway 502 HTML page while the backend keeps generating and writes the portrait to disk minutes later (portraits dir timestamps 17:52 and 17:54 for requests the client abandoned at ~17:51). (4) Regression (test_migration, test_iter5_fixes, test_v2_features, test_health, test_edge_cases; test_pipeline skipped): 89 passed / 1 failed in the configured -n 2 loadscope run; the single failure is test_iter5_fixes::TestStableSeed::test_repeat_portrait_same_character_deterministic returning 502 -- same ingress-timeout root cause (a portrait test on the other xdist worker held the semaphore). Re-run in isolation: PASSED in 11s with byte-identical 56758-byte images, so deterministic seed, chapter.get() defaults, GOOGLE_API_KEY empty short-circuit (<2s fast-fail), local storage, PDF export, 404s and Turkish sanitized errors are all still green -> functionally 90/90.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/characters/{id}/generate-portrait",
+        "issue": "The Semaphore(1) makes the endpoint's response time queue-dependent (measured 45s / 90s / 136s for 3 parallel requests). The public ingress cuts the response at ~60s, so the 2nd/3rd concurrent caller receives a Cloudflare 502 HTML page instead of the app's JSON. Reproduced twice via the public URL: 2/3 and 3/3 requests got 502. The backend still completes the generation and persists the image afterwards, so the UI shows an error while the portrait silently appears on disk/DB -> inconsistent client state. Fix direction: make portrait generation job-based (return job_id + /api/jobs polling like POST /api/mangas), or bound the semaphore wait (e.g. asyncio.wait_for(lock.acquire(), ~20s) -> 503 with a 'try again' Turkish message) so every response returns well under 60s.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "ai_service.generate_image",
+        "issue": "Worst case latency is now up to ~50s of backoff (5+15+30) per call ON TOP of queueing behind other calls; a chapter with N panels serializes to N * (image time) and can far exceed any client timeout. Consider a shorter first backoff or a cap on total in-request wait."
+      },
+      {
+        "endpoint": "ai_service.generate_image",
+        "issue": "Retry-After is only parsed when it is an integer string (isdigit); HTTP-date form of Retry-After falls back to the fixed backoff. Acceptable, but noted."
+      },
+      {
+        "endpoint": "ai_service.generate_image",
+        "issue": "Pre-existing: reference_images argument is accepted and silently ignored (character consistency relies only on the deterministic seed + textual appearance)."
+      },
+      {
+        "endpoint": "GET /api/chapters/{id}/export/pdf",
+        "issue": "Pre-existing: the 502 'Tum panel gorselleri kullanilamiyor' JSON body is replaced by the ingress gateway page."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter6_concurrency.py",
+    "/app/backend/tests/test_iter6_concurrency_internal.py",
+    "/app/test_reports/pytest/it6_concurrency.xml",
+    "/app/test_reports/pytest/it6_internal.xml",
+    "/app/test_reports/pytest/it6_regression.xml"
+  ],
+  "action_items": [
+    "Make POST /api/characters/{id}/generate-portrait non-blocking (job_id + polling) OR cap the semaphore wait and return a fast 503 retry hint, so concurrent portrait requests never exceed the ~60s public ingress timeout (currently 502 HTML for queued callers).",
+    "Ensure the client is not left inconsistent: if the request is abandoned/timed out, the generated portrait is still saved and the char doc updated -- either surface it via a job/status endpoint or skip the write."
+  ],
+  "critical_code_review_comments": [
+    "ai_service.generate_image holds _pollinations_lock across the whole retry loop including sleeps (up to 50s), so one rate-limited call blocks every other image request process-wide; move the sleeps outside the lock or use a queue/worker with a job API.",
+    "_pollinations_lock is created at import time at module scope; it is bound to the running loop only on first use -- fine for the single uvicorn loop, but it will not serialize across multiple workers/processes if the deployment scales out."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter6_concurrency.py",
+    "/app/backend/tests/test_iter6_concurrency_internal.py"
+  ],
+  "success_rate": {"backend": "89/90 regression (100% when portrait tests are not run concurrently); concurrency: 6/6 via internal URL, 1/6 via public URL", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Mongo-seeded mangas/characters tagged TEST_it6_* and TEST_it6int_* (3 characters each), auto-deleted in module teardown.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The 429 flake IS fixed (0 429s across 6 serialized concurrent portraits, verified twice via http://localhost:8001/api). The remaining failure is purely the ~60s public-ingress timeout hitting semaphore-queued requests -> 502 Cloudflare HTML. Use tests/test_iter6_concurrency.py (public URL, currently failing by design) and tests/test_iter6_concurrency_internal.py (internal URL, passing) to re-verify after the endpoint is made async/job-based. Run portrait-heavy tests with -n 0 to avoid cross-worker semaphore contention. Note: writing files under /app/backend/tests triggers a uvicorn watchfiles reload which kills in-flight generations.",
+  "rca_of_the_issue": "Semaphore(1) serializes Pollinations calls, which eliminates the 429s (root cause of the old flake) but converts the wait into request latency. Single portrait ~45s; the 2nd queued request answers at ~90s and the 3rd at ~136s, both beyond the Kubernetes/Cloudflare ingress ~60s response limit, so the client receives 502 HTML while the server-side work completes and persists later."
+}

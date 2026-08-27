@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration-7 backend-only verification of the job-based portrait generation (fix for the iteration-6 public-ingress 502). RESULT: FIXED, all green. (1) New suite /app/backend/tests/test_iter7_portrait_jobs.py (4/4 PASSED, -n 0): POST /api/characters/{id}/generate-portrait returns {job_id} only, in 290ms (assert <2s); job doc has type='portrait', target_id=character_id, manga_id set, status queued/running, int progress, no _id leak; polling GET /api/jobs/{job_id} reached status='done' progress=100 error=null; character.reference_image_url set to /api/files/ai-manga-studio/portraits/..., file on disk 36647 bytes with valid PNG magic, served over GET /api/files/... with image/* content-type, user_uploaded_reference=false -- all with GOOGLE_API_KEY empty (Pollinations-only path confirmed). 404 for unknown character_id is returned BEFORE job creation (verified generation_jobs count for that target_id stays 0); unknown job_id -> 404. (2) PUBLIC-URL CONCURRENCY (the old 502): 3 parallel POSTs through REACT_APP_BACKEND_URL returned HTTP 200 in 0.19s/0.25s/0.43s with 3 distinct job_ids; all 3 jobs reached status='done' and produced 3 distinct portraits on disk (>5KB, valid magic). Re-ran the same scenario twice via the updated test_iter6_concurrency.py (rounds r1/r2): 6/6 HTTP 200, wall time for the HTTP phase 0.4s and 0.3s (was 45s/90s/136s + 502s in iter6). ZERO 502 and ZERO Cloudflare HTML observed. (3) SSE: GET /api/jobs/{job_id}/stream returns text/event-stream and streamed progress 10 -> 100/done in 47.4s for a real portrait, character doc updated -- the flow MangaDetail.jsx relies on works. (4) REGRESSION: test_migration.py + test_iter5_fixes.py + test_v2_features.py + test_health.py + test_edge_cases.py = 90 passed / 0 failed (default -n 2 loadscope) after converting the 3 legacy synchronous portrait assertions to the job pattern; test_iter6_concurrency.py = 5/5 passed (2 concurrency rounds + 3 semaphore/backoff/Retry-After unit checks still valid). Backend logs during the whole run contain only expected entries (GOOGLE_API_KEY sanitized text-job errors, PDF skip warnings, one 'Pollinations HTTP 500 (deneme 0)' that was retried successfully); no 429s, no tracebacks.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/jobs/{job_id}/stream",
+        "issue": "Intermediate progress 85 is usually missed by the 0.8s DB poll (client sees 10 -> 100 only). Cosmetic; progress bar jumps."
+      },
+      {
+        "endpoint": "generation_jobs lifecycle",
+        "issue": "No recovery/cleanup for jobs left in 'queued'/'running' after a backend restart (asyncio tasks are in-process only). Such a job never reaches a terminal state, so the SSE stream hangs until its ~15min cap and the UI shows an eternal spinner. Consider marking stale running jobs as error on startup."
+      },
+      {
+        "endpoint": "ai_service.generate_image",
+        "issue": "Pre-existing (carried from iter6): worst case ~50s backoff (5+15+30) per image and Semaphore(1) serialization make total job time grow linearly with queue depth; now only affects job duration, not HTTP latency. Also reference_images arg is still accepted and silently ignored."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter7_portrait_jobs.py",
+    "/app/backend/tests/test_iter6_concurrency.py",
+    "/app/test_reports/pytest/it7_portrait_jobs.xml",
+    "/app/test_reports/pytest/it7_regression.xml",
+    "/app/test_reports/pytest/it7_it6concurrency.xml"
+  ],
+  "action_items": [
+    "No blocking action item: the 502 regression is fixed and full backend regression is green (99/99 executed tests passing).",
+    "Optional hardening: mark stale 'queued'/'running' generation_jobs as error on backend startup so the SSE/polling clients are not left spinning after a restart."
+  ],
+  "critical_code_review_comments": [
+    "generate_portrait correctly validates the character (404) before inserting the job row and returns only {job_id} -- good. _spawn keeps a strong task reference, so the background worker cannot be GC'd.",
+    "_run_portrait_generation wraps everything in try/except and stores _sanitize_ai_error(e) in job.error, so raw provider/key details are not leaked to the client.",
+    "Background work is process-local: portrait jobs will not survive a reload/restart and are not visible to other workers if the deployment scales out; a persisted queue would be needed for multi-replica."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7_portrait_jobs.py (new)",
+    "/app/backend/tests/test_iter6_concurrency.py (job-pattern assertions + _wait_job helper)",
+    "/app/backend/tests/test_migration.py (TestPollinationsPortrait now polls the job)",
+    "/app/backend/tests/test_iter5_fixes.py (2 portrait tests now poll the job)",
+    "/app/backend/tests/test_iter6_concurrency_internal.py (deleted -- the internal-URL workaround is obsolete now that the public URL works)"
+  ],
+  "success_rate": {"backend": "100% (99/99 executed: 4 iter7 + 5 iter6 + 90 regression)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Mongo-seeded mangas/characters tagged TEST_it7_*, TEST_it6_*, TEST_it7sse (auto-deleted in module teardown / inline cleanup).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Portrait generation is now job-based: POST returns {job_id} in <500ms, poll GET /api/jobs/{job_id} or consume GET /api/jobs/{job_id}/stream (SSE). Use tests/test_iter7_portrait_jobs.py as the canonical suite; run portrait-heavy files with -n 0 (each real Pollinations image takes ~45s and the Semaphore(1) serializes them, so 3 jobs ~2.5min). test_iter6_concurrency_internal.py was removed (public URL no longer 502s). test_pipeline.py remains skipped/unused. Frontend (MangaDetail.jsx SSE portrait flow) has NOT been UI-tested this iteration.",
+  "rca_of_the_issue": "Previous 502 root cause: the Pollinations Semaphore(1) turned queue wait into HTTP response latency (90-136s) beyond the ~60s ingress timeout. Fix verified: the endpoint now only validates + inserts a job row and spawns an asyncio task, so the client's HTTP request returns in ~0.2-0.4s regardless of queue depth while the semaphore keeps serializing the actual provider calls inside the worker."
+}
